@@ -1,0 +1,630 @@
+/**
+ * Command Handler
+ * 
+ * Handles slash-command style messages from users:
+ * - /request-record <uid-or-name> <justification>
+ * - /request-folder <uid-or-name> <justification>
+ * - /share <uid-or-name> [justification]
+ * - /help
+ */
+
+const keeperClient = require('../services/keeperClient');
+const { getChannelService } = require('../services');
+const graphService = require('../services/graphService');
+const cards = require('../cards');
+const config = require('../config');
+const { isUid } = require('../utils/helpers');
+
+/**
+ * Generate a unique approval ID
+ * @returns {string} - Short unique ID
+ */
+function generateApprovalId() {
+  return Math.random().toString(36).substring(2, 10);
+}
+
+/**
+ * Parse command text into command name and arguments
+ * @param {string} text - Raw message text
+ * @returns {Object} - { command, args }
+ */
+function parseCommand(text) {
+  const trimmed = text.trim();
+  
+  // Handle commands with or without leading slash
+  const normalized = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
+  
+  // Split into command and remaining args
+  const [command, ...rest] = normalized.split(/\s+/);
+  const argsText = rest.join(' ');
+  
+  return {
+    command: command.toLowerCase(),
+    argsText,
+    args: rest,
+  };
+}
+
+/**
+ * Parse uid and justification from args text
+ * Handles quoted strings for names with spaces
+ * @param {string} argsText - Raw arguments text
+ * @returns {Object} - { uid, justification }
+ */
+function parseUidAndJustification(argsText) {
+  const trimmed = argsText.trim();
+  
+  if (!trimmed) {
+    return { uid: null, justification: '' };
+  }
+  
+  // Check if starts with quote (name with spaces)
+  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
+    const quote = trimmed[0];
+    const endQuote = trimmed.indexOf(quote, 1);
+    if (endQuote > 0) {
+      const uid = trimmed.substring(1, endQuote);
+      const justification = trimmed.substring(endQuote + 1).trim();
+      return { uid, justification };
+    }
+  }
+  
+  // Otherwise, first word is uid, rest is justification
+  const [uid, ...rest] = trimmed.split(/\s+/);
+  return { uid, justification: rest.join(' ') };
+}
+
+/**
+ * Get user info from activity
+ * Fetches real email address from Microsoft Graph API
+ * @param {Object} activity - Teams activity
+ * @returns {Promise<Object>} - { userId, userName, userEmail }
+ */
+async function getUserInfo(activity) {
+  const from = activity.from || {};
+  const userInfo = {
+    teamsUserId: from.id || 'unknown',
+    userName: from.name || 'Unknown User',
+    userEmail: null, // Will be fetched from Graph API
+  };
+
+  // Try to get email from Microsoft Graph API
+  const aadObjectId = from.aadObjectId;
+  if (aadObjectId) {
+    try {
+      const email = await graphService.getUserEmail(aadObjectId);
+      if (email) {
+        userInfo.userEmail = email;
+        console.log(`[getUserInfo] Fetched email for user ${from.name}: ${email}`);
+      } else {
+        console.warn(`[getUserInfo] No email found for user ${from.name} (AAD ID: ${aadObjectId})`);
+      }
+    } catch (error) {
+      console.error(`[getUserInfo] Error fetching email for user ${from.name}:`, error.message);
+      // Fallback: check if email is directly in activity (rare, but possible)
+      userInfo.userEmail = from.email || from.userPrincipalName || null;
+    }
+  } else {
+    // No AAD Object ID available - try fallback fields
+    userInfo.userEmail = from.email || from.userPrincipalName || null;
+    if (!userInfo.userEmail) {
+      console.warn(`[getUserInfo] No AAD Object ID found for user ${from.name}, cannot fetch email`);
+    }
+  }
+
+  return userInfo;
+}
+
+/**
+ * Handle the request-record command
+ * @param {Object} context - Teams turn context
+ * @param {string} argsText - Command arguments (uid/name + justification)
+ * @returns {Promise<void>}
+ */
+async function handleRequestRecord(context, argsText) {
+  const { uid, justification } = parseUidAndJustification(argsText);
+  
+  if (!uid) {
+    await context.send('❌ **Usage:** `request-record <record-uid-or-name> <justification>`\n\nExample: `request-record ABC123 Need for deployment`');
+    return;
+  }
+  
+  if (!justification) {
+    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `request-record <record-uid-or-name> <justification>`');
+    return;
+  }
+  
+  // Check if identifier is a UID or description
+  const isUidFormat = isUid(uid.trim());
+  let record = null;
+  let recordUid = null;
+  let recordTitle = uid; // Default to the identifier
+  
+  if (isUidFormat) {
+    // Try to get record by UID
+    await context.send('🔍 Looking up record...');
+    record = await keeperClient.getRecordByUid(uid.trim());
+    if (record) {
+      recordUid = record.uid;
+      recordTitle = record.title;
+    }
+  }
+  
+  // If not found by UID or not a UID format, treat as description
+  if (!record && isUidFormat) {
+    // UID format but not found - might be invalid
+    await context.send('❌ Record not found: `' + uid + '`\n\nPlease check the UID and try again.');
+    return;
+  }
+  
+  // Get user info
+  const userInfo = await getUserInfo(context.activity);
+  const approvalId = generateApprovalId();
+  
+  // Build approval card
+  // If not a UID or UID not found, pass isUid=false and identifier
+  const approvalCard = cards.createRecordApprovalCard({
+    approvalId,
+    recordUid: recordUid || uid, // Use actual UID if found, otherwise identifier
+    recordTitle: recordTitle,
+    recordType: record?.recordType || 'Unknown',
+    requesterName: userInfo.userName,
+    requesterId: userInfo.teamsUserId,
+    requesterEmail: userInfo.userEmail,
+    requesterAadObjectId: context.activity.from?.aadObjectId, // Extract AAD Object ID for email fetching fallback
+    justification,
+    isUid: isUidFormat && !!record, // True only if UID format AND found
+    identifier: uid, // Always pass the original identifier
+  });
+  
+  // Try to send to approvals channel (like Slack does)
+  const channelService = getChannelService();
+  let sentToChannel = false;
+  
+  if (channelService) {
+    const status = channelService.getStatus();
+    const canSend = status.approvalsChannelReady && status.appReady;
+    
+    if (canSend) {
+      sentToChannel = await channelService.sendApprovalCard(
+        approvalCard,
+        `📋 New record access request from **${userInfo.userName}**`
+      );
+    } else {
+      console.log('[CommandHandler] Cannot send to approvals channel:', {
+        approvalsReady: status.approvalsChannelReady,
+        appReady: status.appReady
+      });
+    }
+  }
+  
+  if (sentToChannel) {
+    // Approval sent to dedicated channel - notify requester
+    await context.send(
+      '✅ **Access request submitted!**\n\n' +
+      `• **Request ID:** \`${approvalId}\`\n` +
+      `• **Record:** ${record?.title || uid}\n` +
+      `• **Justification:** ${justification}\n\n` +
+      'Your request has been sent to the **approvals channel** for review.\n' +
+      'You will be notified when an administrator approves or denies your request.'
+    );
+  } else {
+    // Fallback: send to current conversation (for testing or when channel not configured)
+    await context.send({
+      type: 'message',
+      attachments: [{
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        content: approvalCard,
+      }],
+    });
+    
+    const displayTitle = record?.title || recordTitle || uid;
+    await context.send(
+      '✅ Access request submitted for **' + displayTitle + '**\n\n' +
+      'An administrator will review your request.\n\n' +
+      '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
+    );
+  }
+}
+
+/**
+ * Handle the request-folder command
+ * @param {Object} context - Teams turn context
+ * @param {string} argsText - Command arguments (uid/name + justification)
+ * @returns {Promise<void>}
+ */
+async function handleRequestFolder(context, argsText) {
+  const { uid, justification } = parseUidAndJustification(argsText);
+  
+  if (!uid) {
+    await context.send('❌ **Usage:** `request-folder <folder-uid-or-name> <justification>`\n\nExample: `request-folder "Engineering Creds" Project onboarding`');
+    return;
+  }
+  
+  if (!justification) {
+    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `request-folder <folder-uid-or-name> <justification>`');
+    return;
+  }
+  
+  // Look up the folder
+  await context.send('🔍 Looking up folder...');
+  
+  let folder = await keeperClient.getFolderByUid(uid);
+  
+  if (!folder) {
+    // Try searching by name
+    const searchResults = await keeperClient.searchFolders(uid, 5);
+    
+    if (searchResults.length === 0) {
+      await context.send('❌ Folder not found: `' + uid + '`\n\nPlease check the UID or name and try again.');
+      return;
+    }
+    
+    if (searchResults.length === 1) {
+      folder = searchResults[0];
+    } else {
+      // Multiple matches - show options
+      let message = '⚠️ Multiple folders found. Please use the exact UID:\n\n';
+      for (const f of searchResults) {
+        message += '• `' + f.uid + '` - ' + f.name + '\n';
+      }
+      await context.send(message);
+      return;
+    }
+  }
+  
+  // Get user info
+  const userInfo = await getUserInfo(context.activity);
+  const approvalId = generateApprovalId();
+  
+  // Build approval card
+  const approvalCard = cards.createFolderApprovalCard({
+    approvalId,
+    folderUid: folder?.uid || uid,
+    folderName: folder?.name || uid,
+    folderType: folder?.folderType || 'shared_folder',
+    requesterName: userInfo.userName,
+    requesterId: userInfo.teamsUserId,
+    requesterEmail: userInfo.userEmail,
+    justification,
+  });
+  
+  // Try to send to approvals channel (like Slack does)
+  const channelService = getChannelService();
+  let sentToChannel = false;
+  
+  if (channelService) {
+    const status = channelService.getStatus();
+    const canSend = status.approvalsChannelReady && status.appReady;
+    
+    if (canSend) {
+      sentToChannel = await channelService.sendApprovalCard(
+        approvalCard,
+        `📁 New folder access request from **${userInfo.userName}**`
+      );
+    } else {
+      console.log('[CommandHandler] Cannot send to approvals channel:', {
+        approvalsReady: status.approvalsChannelReady,
+        appReady: status.appReady
+      });
+    }
+  }
+  
+  if (sentToChannel) {
+    // Approval sent to dedicated channel - notify requester
+    await context.send(
+      '✅ **Folder access request submitted!**\n\n' +
+      `• **Request ID:** \`${approvalId}\`\n` +
+      `• **Folder:** ${folder?.name || uid}\n` +
+      `• **Justification:** ${justification}\n\n` +
+      'Your request has been sent to the **approvals channel** for review.\n' +
+      'You will be notified when an administrator approves or denies your request.'
+    );
+  } else {
+    // Fallback: send to current conversation
+    await context.send({
+      type: 'message',
+      attachments: [{
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        content: approvalCard,
+      }],
+    });
+    
+    await context.send(
+      '✅ Access request submitted for folder **' + (folder?.name || uid) + '**\n\n' +
+      'An administrator will review your request.\n\n' +
+      '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
+    );
+  }
+}
+
+/**
+ * Handle the share (one-time-share) command
+ * @param {Object} context - Teams turn context
+ * @param {string} argsText - Command arguments (uid/name + optional justification)
+ * @returns {Promise<void>}
+ */
+async function handleShare(context, argsText) {
+  const { uid, justification } = parseUidAndJustification(argsText);
+  
+  if (!uid) {
+    await context.send('❌ **Usage:** `share <record-uid-or-name> [justification]`\n\nExample: `share XYZ789 Share with contractor`');
+    return;
+  }
+  
+  // Look up the record
+  await context.send('🔍 Looking up record...');
+  
+  let record = await keeperClient.getRecordByUid(uid);
+  
+  if (!record) {
+    const searchResults = await keeperClient.searchRecords(uid, 5);
+    
+    if (searchResults.length === 0) {
+      await context.send('❌ Record not found: `' + uid + '`');
+      return;
+    }
+    
+    if (searchResults.length === 1) {
+      record = searchResults[0];
+    } else {
+      let message = '⚠️ Multiple records found. Please use the exact UID:\n\n';
+      for (const r of searchResults) {
+        message += '• `' + r.uid + '` - ' + r.title + '\n';
+      }
+      await context.send(message);
+      return;
+    }
+  }
+  
+  // Check if share approval is required
+  if (config.features.requireShareApproval) {
+    const userInfo = await getUserInfo(context.activity);
+    const approvalId = generateApprovalId();
+    
+    const approvalCard = cards.createShareApprovalCard({
+      approvalId,
+      recordUid: record?.uid || uid,
+      recordTitle: record?.title || uid,
+      requesterName: userInfo.userName,
+      requesterId: userInfo.teamsUserId,
+      requesterEmail: userInfo.userEmail,
+      justification: justification || 'No justification provided',
+    });
+    
+    // Try to send to approvals channel
+    const channelService = getChannelService();
+    let sentToChannel = false;
+    
+    if (channelService) {
+      const status = channelService.getStatus();
+      const canSend = status.approvalsChannelReady && status.appReady;
+      
+      if (canSend) {
+        sentToChannel = await channelService.sendApprovalCard(
+          approvalCard,
+          `🔗 New one-time share request from **${userInfo.userName}**`
+        );
+      } else {
+        console.log('[CommandHandler] Cannot send to approvals channel:', {
+          approvalsReady: status.approvalsChannelReady,
+          appReady: status.appReady
+        });
+      }
+    }
+    
+    if (sentToChannel) {
+      await context.send(
+        '✅ **Share request submitted!**\n\n' +
+        `• **Request ID:** \`${approvalId}\`\n` +
+        `• **Record:** ${record?.title || uid}\n` +
+        `• **Justification:** ${justification || 'No justification provided'}\n\n` +
+        'Your request has been sent to the **approvals channel** for review.\n' +
+        'Once approved, you will receive the share link via DM.'
+      );
+    } else {
+      await context.send({
+        type: 'message',
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: approvalCard,
+        }],
+      });
+      
+      await context.send(
+        '✅ Share request submitted for **' + (record?.title || uid) + '**\n\n' +
+        'An administrator will review your request.\n\n' +
+        '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
+      );
+    }
+    return;
+  }
+  
+  // Create the share directly (no approval required)
+  await context.send('🔗 Creating one-time share link...');
+  
+  const result = await keeperClient.createOneTimeShare(record?.uid || uid, 86400, false);
+  
+  if (result.success) {
+    const resultCard = cards.createShareResultCard({
+      recordTitle: record?.title || uid,
+      shareUrl: result.shareUrl,
+      expiresAt: result.expiresAt,
+    });
+    
+    await context.send({
+      type: 'message',
+      attachments: [{
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        content: resultCard,
+      }],
+    });
+  } else {
+    await context.send('❌ Failed to create share link: ' + result.error);
+  }
+}
+
+/**
+ * Handle the search command
+ * @param {Object} context - Teams turn context
+ * @param {string} argsText - Search query
+ * @param {string} searchType - 'record' or 'folder'
+ * @returns {Promise<void>}
+ */
+async function handleSearch(context, argsText, searchType = 'record') {
+  const query = argsText.trim();
+  
+  if (!query) {
+    const typeLabel = searchType === 'record' ? 'records' : 'folders';
+    await context.send('❌ **Usage:** `search-' + typeLabel + ' <query>`\n\nExample: `search-' + typeLabel + ' production`');
+    return;
+  }
+  
+  if (!config.features.enableSearch) {
+    await context.send('❌ Search is not enabled. Contact your administrator.');
+    return;
+  }
+  
+  await context.send('🔍 Searching...');
+  
+  let results;
+  if (searchType === 'record') {
+    results = await keeperClient.searchRecords(query, 10);
+  } else {
+    results = await keeperClient.searchFolders(query, 10);
+  }
+  
+  if (results.length === 0) {
+    await context.send('No ' + searchType + 's found matching "' + query + '"');
+    return;
+  }
+  
+  // Build results card
+  const resultsCard = cards.createSearchResultsCard({
+    searchType,
+    query,
+    results,
+  });
+  
+  await context.send({
+    type: 'message',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: resultsCard,
+    }],
+  });
+}
+
+/**
+ * Handle the help command
+ * @param {Object} context - Teams turn context
+ * @returns {Promise<void>}
+ */
+async function handleHelp(context) {
+  const helpCard = cards.createHelpCard();
+  
+  await context.send({
+    type: 'message',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: helpCard,
+    }],
+  });
+}
+
+/**
+ * Handle the status command
+ * @param {Object} context - Teams turn context
+ * @returns {Promise<void>}
+ */
+async function handleStatus(context) {
+  await context.send('🔄 Checking Keeper connection...');
+  
+  const isHealthy = await keeperClient.healthCheck();
+  
+  if (isHealthy) {
+    await context.send('✅ **Keeper Status:** Connected\n\n' +
+      '• Service URL: `' + (config.keeper?.serviceUrl || 'Not configured') + '`\n' +
+      '• PEDM Polling: ' + (config.pedm?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
+      '• Device Approval: ' + (config.deviceApproval?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
+      '• Search: ' + (config.features?.enableSearch ? '✅ Enabled' : '❌ Disabled')
+    );
+  } else {
+    await context.send('❌ **Keeper Status:** Disconnected\n\n' +
+      'Unable to connect to Keeper Commander Service Mode.\n' +
+      'Service URL: `' + (config.keeper?.serviceUrl || 'Not configured') + '`\n\n' +
+      'Please check that Keeper Commander is running in Service Mode.'
+    );
+  }
+}
+
+/**
+ * Route a command to the appropriate handler
+ * @param {Object} context - Teams turn context
+ * @param {string} text - Raw message text
+ * @returns {Promise<boolean>} - True if command was handled, false otherwise
+ */
+async function routeCommand(context, text) {
+  const { command, argsText } = parseCommand(text);
+  
+  switch (command) {
+    case 'request-record':
+    case 'requestrecord':
+    case 'rr':
+      await handleRequestRecord(context, argsText);
+      return true;
+      
+    case 'request-folder':
+    case 'requestfolder':
+    case 'rf':
+      await handleRequestFolder(context, argsText);
+      return true;
+      
+    case 'share':
+    case 'one-time-share':
+    case 'onetimeshare':
+    case 'ots':
+      await handleShare(context, argsText);
+      return true;
+      
+    case 'search-records':
+    case 'searchrecords':
+    case 'sr':
+      await handleSearch(context, argsText, 'record');
+      return true;
+      
+    case 'search-folders':
+    case 'searchfolders':
+    case 'sf':
+      await handleSearch(context, argsText, 'folder');
+      return true;
+      
+    case 'help':
+    case 'h':
+    case '?':
+      await handleHelp(context);
+      return true;
+      
+    case 'status':
+    case 'st':
+      await handleStatus(context);
+      return true;
+      
+    default:
+      return false;
+  }
+}
+
+module.exports = {
+  routeCommand,
+  handleRequestRecord,
+  handleRequestFolder,
+  handleShare,
+  handleSearch,
+  handleHelp,
+  handleStatus,
+  parseCommand,
+  parseUidAndJustification,
+  generateApprovalId,
+  getUserInfo,
+};

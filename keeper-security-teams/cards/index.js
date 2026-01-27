@@ -1,0 +1,50 @@
+/**
+ * Cards index - export all Adaptive Card builders
+ */
+
+const approvalCard = require('./approvalCard');
+const resultCard = require('./resultCard');
+const pedmCard = require('./pedmCard');
+const deviceCard = require('./deviceCard');
+
+module.exports = {
+  // Approval request cards
+  buildRecordApprovalCard: approvalCard.buildRecordApprovalCard,
+  buildFolderApprovalCard: approvalCard.buildFolderApprovalCard,
+  buildOneTimeShareApprovalCard: approvalCard.buildOneTimeShareApprovalCard,
+  createRecordApprovalCard: approvalCard.createRecordApprovalCard,
+  createFolderApprovalCard: approvalCard.createFolderApprovalCard,
+  createShareApprovalCard: approvalCard.createShareApprovalCard,
+  
+  // Result/notification cards
+  buildApprovalResultCard: resultCard.buildApprovalResultCard,
+  buildShareResultCard: resultCard.buildShareResultCard,
+  buildSearchResultsCard: resultCard.buildSearchResultsCard,
+  buildHelpCard: resultCard.buildHelpCard,
+  buildErrorCard: resultCard.buildErrorCard,
+  buildApprovedMessageCard: resultCard.buildApprovedMessageCard,
+  buildDeniedMessageCard: resultCard.buildDeniedMessageCard,
+  createShareResultCard: resultCard.createShareResultCard,
+  createSearchResultsCard: resultCard.createSearchResultsCard,
+  createHelpCard: resultCard.createHelpCard,
+  
+  // PEDM cards
+  buildPedmApprovalCard: pedmCard.buildPedmApprovalCard,
+  buildPedmApprovedCard: pedmCard.buildPedmApprovedCard,
+  buildPedmDeniedCard: pedmCard.buildPedmDeniedCard,
+  
+  // Device approval cards
+  buildDeviceApprovalCard: deviceCard.buildDeviceApprovalCard,
+  buildDeviceApprovedCard: deviceCard.buildDeviceApprovedCard,
+  buildDeviceDeniedCard: deviceCard.buildDeviceDeniedCard,
+  
+  // Constants
+  RECORD_PERMISSIONS: approvalCard.RECORD_PERMISSIONS,
+  FOLDER_PERMISSIONS: approvalCard.FOLDER_PERMISSIONS,
+  DURATION_OPTIONS: approvalCard.DURATION_OPTIONS,
+  
+  // Helpers
+  formatPermission: resultCard.formatPermission,
+  formatDate: resultCard.formatDate,
+  getRecordIcon: resultCard.getRecordIcon,
+};
