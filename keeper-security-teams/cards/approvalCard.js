@@ -42,161 +42,156 @@ const DURATION_OPTIONS = [
 
 /**
  * Build an Adaptive Card for record access approval request
+ * Slack-style layout with two columns
  */
 function buildRecordApprovalCard({
   approvalId,
   requesterName,
   requesterId,
   requesterEmail,
-  requesterAadObjectId, // AAD Object ID for email fetching fallback
+  requesterAadObjectId,
   recordTitle,
   recordUid,
   recordType = 'login',
   justification,
-  isUid = true, // New: whether identifier is a valid UID
-  identifier, // New: original identifier (UID or description)
+  isUid = true,
+  identifier,
 }) {
+  // Format timestamp
+  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.5',
+    version: '1.2',
     body: [
+      // Header
       {
-        type: 'Container',
-        style: 'emphasis',
-        items: [
+        type: 'TextBlock',
+        text: 'Record Access Request',
+        weight: 'Bolder',
+        size: 'ExtraLarge',
+      },
+      // Two-column layout for details
+      {
+        type: 'ColumnSet',
+        columns: [
           {
-            type: 'ColumnSet',
-            columns: [
+            type: 'Column',
+            width: 'stretch',
+            items: [
               {
-                type: 'Column',
-                width: 'auto',
-                items: [
-                  {
-                    type: 'TextBlock',
-                    text: '🔐',
-                    size: 'ExtraLarge',
-                  },
-                ],
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
               },
               {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  {
-                    type: 'TextBlock',
-                    text: 'Record Access Request',
-                    weight: 'Bolder',
-                    size: 'Large',
-                    color: 'Accent',
-                  },
-                  {
-                    type: 'TextBlock',
-                    text: 'ID: ' + approvalId,
-                    size: 'Small',
-                    isSubtle: true,
-                  },
-                ],
+                type: 'TextBlock',
+                text: requesterName,
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Record:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: identifier || recordTitle,
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Requested:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requestedTime,
+                size: 'Medium',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId,
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
               },
             ],
           },
         ],
       },
-      {
-        type: 'Container',
-        items: [
-          {
-            type: 'FactSet',
-            facts: [
-              { title: 'Requester', value: requesterName },
-              { title: 'Record', value: recordTitle },
-              ...(isUid ? [{ title: 'Record UID', value: recordUid }] : []),
-              { title: 'Type', value: recordType },
-            ],
-          },
-        ],
-      },
-      // Add warning if not a UID
-      ...(isUid ? [] : [
-        {
-          type: 'Container',
-          style: 'attention',
-          items: [
-            {
-              type: 'TextBlock',
-              text: '⚠️ Action Required: Approver must search for the correct record',
-              weight: 'Bolder',
-              color: 'Attention',
-              wrap: true,
-            },
-            {
-              type: 'TextBlock',
-              text: 'The requester provided a description: "' + (identifier || recordTitle) + '"',
-              wrap: true,
-              isSubtle: true,
-            },
-          ],
-        },
-      ]),
-      {
-        type: 'Container',
-        items: [
-          {
-            type: 'TextBlock',
-            text: 'Justification',
-            weight: 'Bolder',
-            size: 'Medium',
-          },
-          {
-            type: 'TextBlock',
-            text: justification || 'No justification provided',
-            wrap: true,
-            color: justification ? 'Default' : 'Attention',
-          },
-        ],
-      },
-      // Only show permission/duration selectors if UID is valid
-      ...(isUid ? [
-        {
-          type: 'Container',
-          separator: true,
-          items: [
-            {
-              type: 'TextBlock',
-              text: 'Permission Level',
-              weight: 'Bolder',
-            },
-            {
-              type: 'Input.ChoiceSet',
-              id: 'permission',
-              value: 'view_only',
-              choices: RECORD_PERMISSIONS,
-            },
-            {
-              type: 'TextBlock',
-              text: 'Duration',
-              weight: 'Bolder',
-            },
-            {
-              type: 'Input.ChoiceSet',
-              id: 'duration',
-              value: '24h',
-              choices: DURATION_OPTIONS,
-            },
-          ],
-        },
-      ] : []),
     ],
     actions: [],
   };
   
-  // Set actions based on isUid
+  // Add content based on isUid
   if (isUid) {
-    // Valid UID - show approve/deny buttons
+    // Valid UID - show permission/duration selectors
+    card.body.push(
+      {
+        type: 'TextBlock',
+        text: 'Permission Level',
+        weight: 'Bolder',
+        size: 'Medium',
+        spacing: 'Medium',
+      },
+      {
+        type: 'Input.ChoiceSet',
+        id: 'permission',
+        value: 'view_only',
+        choices: RECORD_PERMISSIONS,
+      },
+      {
+        type: 'TextBlock',
+        text: 'Duration',
+        weight: 'Bolder',
+        size: 'Medium',
+        spacing: 'Medium',
+      },
+      {
+        type: 'Input.ChoiceSet',
+        id: 'duration',
+        value: '24h',
+        choices: DURATION_OPTIONS,
+      }
+    );
+    
     card.actions = [
       {
         type: 'Action.Submit',
-        title: '✅ Approve',
+        title: 'Approve',
         style: 'positive',
         data: {
           action: 'approve_record',
@@ -210,7 +205,7 @@ function buildRecordApprovalCard({
       },
       {
         type: 'Action.Submit',
-        title: '❌ Deny',
+        title: 'Deny',
         style: 'destructive',
         data: {
           action: 'deny_record',
@@ -223,36 +218,66 @@ function buildRecordApprovalCard({
       },
     ];
   } else {
-    // Description - show search button and deny only
-    // Use msteams property to trigger task module
+    // Description - show action required with search button inline
+    card.body.push({
+      type: 'ColumnSet',
+      spacing: 'Large',
+      columns: [
+        {
+          type: 'Column',
+          width: 'stretch',
+          verticalContentAlignment: 'Center',
+          items: [
+            {
+              type: 'TextBlock',
+              text: '**Action Required:** Approver must search for the correct record',
+              wrap: true,
+              size: 'Medium',
+            },
+          ],
+        },
+        {
+          type: 'Column',
+          width: 'auto',
+          items: [
+            {
+              type: 'ActionSet',
+              actions: [
+                {
+                  type: 'Action.Submit',
+                  title: '🔍 Search Records',
+                  data: {
+                    action: 'search_records',
+                    approvalId: approvalId,
+                    identifier: identifier || recordTitle,
+                    recordTitle: recordTitle,
+                    requesterId: requesterId,
+                    requesterEmail: requesterEmail,
+                    requesterAadObjectId: requesterAadObjectId,
+                    requesterName: requesterName,
+                    justification: justification,
+                    msteams: {
+                      type: 'task/fetch',
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    
+    // Only Deny button at bottom
     card.actions = [
       {
         type: 'Action.Submit',
-        title: '🔍 Search Records',
-        style: 'positive',
-        data: {
-          action: 'search_records',
-          approvalId: approvalId,
-          identifier: identifier || recordTitle,
-          recordTitle: recordTitle,
-          requesterId: requesterId,
-          requesterEmail: requesterEmail,
-          requesterAadObjectId: requesterAadObjectId, // Store AAD Object ID for email fetching fallback
-          requesterName: requesterName,
-          justification: justification,
-          msteams: {
-            type: 'task/fetch',
-          },
-        },
-      },
-      {
-        type: 'Action.Submit',
-        title: '❌ Deny Request',
+        title: 'Deny Request',
         style: 'destructive',
         data: {
           action: 'deny_record',
           approvalId: approvalId,
-          recordUid: null, // No UID yet
+          recordUid: null,
           recordTitle: recordTitle,
           requesterId: requesterId,
           requesterName: requesterName,

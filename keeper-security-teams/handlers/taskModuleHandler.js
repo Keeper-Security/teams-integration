@@ -4,10 +4,12 @@
  * 
  * Similar to Slack's modal flow:
  * 1. Approver clicks "Search Records" button
- * 2. Task module opens with loading state
- * 3. Search executes (async)
- * 4. Modal updated with results (radio buttons, permission/duration selectors)
- * 5. Approver selects record and approves
+ * 2. Task module opens with search results (auto-search)
+ * 3. Approver selects record, permission, duration
+ * 4. Approver clicks "Approve Access"
+ * 
+ * IMPORTANT: Use Adaptive Card version 1.2 for Task Module compatibility
+ * Buttons must be in the card's main actions array (not nested in ColumnSet)
  */
 
 const keeperClient = require('../services/keeperClient');
@@ -31,9 +33,9 @@ const DURATION_MAP = {
 const RECORD_PERMISSIONS = [
   { title: 'View Only', value: 'view_only' },
   { title: 'Can Edit', value: 'can_edit' },
-  { title: 'Can Share (Permanent)', value: 'can_share' },
-  { title: 'Edit & Share (Permanent)', value: 'edit_and_share' },
-  { title: 'Change Owner (Permanent)', value: 'change_owner' },
+  { title: 'Can Share', value: 'can_share' },
+  { title: 'Edit & Share', value: 'edit_and_share' },
+  { title: 'Change Owner', value: 'change_owner' },
 ];
 
 /**
@@ -50,13 +52,15 @@ const DURATION_OPTIONS = [
 ];
 
 /**
+ * Permissions that are permanent-only (no duration support)
+ * Like Slack, these permissions don't support time limits
+ */
+const PERMANENT_ONLY_PERMISSIONS = ['can_share', 'edit_and_share', 'change_owner'];
+
+/**
  * Handle task/fetch - Show search modal
- * @param {Object} context - Teams turn context
- * @param {Object} activity - Activity object (from invoke or task/fetch event)
- * @returns {Promise<Object>} - Task module response
  */
 async function handleTaskFetch(context, activity) {
-  // activity might be the full activity object or just the value
   let requestData = {};
   
   console.log('[TaskModule] Raw activity structure:', {
@@ -68,26 +72,20 @@ async function handleTaskFetch(context, activity) {
   
   // Try to extract data from different possible structures
   if (activity.value) {
-    // If it's an invoke activity, the data is in activity.value
-    // When Teams converts cardAction with msteams to invoke, the structure is:
-    // activity.value = { data: { ...card action data... } }
     if (activity.value.data) {
       requestData = activity.value.data;
     } else if (activity.value.value && activity.value.value.data) {
       requestData = activity.value.value.data;
     } else {
-      // Fallback: use activity.value directly (might be the card action data)
       requestData = activity.value;
     }
   } else if (activity.data) {
-    // If data is directly on activity
     requestData = activity.data;
   } else {
-    // Fallback: use activity itself
     requestData = activity;
   }
   
-  // Extract fields - handle both direct fields and nested structure
+  // Extract fields
   let type = requestData.type;
   let query = requestData.query;
   let approvalId = requestData.approvalId;
@@ -101,13 +99,12 @@ async function handleTaskFetch(context, activity) {
     approvalId = requestData.approvalId;
     identifier = requestData.identifier;
     
-    // Build approval context from card action data
     approvalContext = {
       approvalId: requestData.approvalId,
       requesterEmail: requestData.requesterEmail,
       requesterName: requestData.requesterName,
       requesterId: requestData.requesterId,
-      requesterAadObjectId: requestData.requesterAadObjectId, // Store AAD Object ID for email fetching fallback
+      requesterAadObjectId: requestData.requesterAadObjectId,
       justification: requestData.justification,
       identifier: requestData.identifier,
       recordTitle: requestData.recordTitle,
@@ -129,37 +126,25 @@ async function handleTaskFetch(context, activity) {
   const contextData = approvalContext || requestData;
 
   if (searchType === 'search-record' || searchType === 'search_records') {
-    // Show loading state first
-    return buildSearchModal(searchQuery, searchApprovalId, true, contextData);
+    if (searchQuery && searchQuery.trim()) {
+      console.log('[TaskModule] Auto-executing search on modal open for:', searchQuery);
+      return await handleSearchAction(searchQuery, searchApprovalId, contextData, true);
+    } else {
+      return buildSearchModal('', searchApprovalId, false, contextData, [], true);
+    }
   }
 
-  return buildSearchModal(searchQuery, searchApprovalId, false, contextData);
+  return buildSearchModal(searchQuery, searchApprovalId, false, contextData, [], true);
 }
 
 /**
  * Handle task/submit - Process search actions
- * @param {Object} context - Teams turn context
- * @param {Object} activity - Activity object (from invoke or task/submit event)
- * @returns {Promise<Object>} - Task module response
  */
 async function handleTaskSubmit(context, activity) {
-  // Extract data from activity
-  let submitData = {};
+  // Simple data extraction - activity.value contains form data directly
+  const submitData = activity.value?.data || activity.value || {};
   
-  if (activity.value) {
-    // If it's an invoke activity, the data is in activity.value
-    if (activity.value.data) {
-      submitData = activity.value.data;
-    } else if (activity.value.value && activity.value.value.data) {
-      submitData = activity.value.value.data;
-    } else {
-      submitData = activity.value;
-    }
-  } else if (activity.data) {
-    submitData = activity.data;
-  } else {
-    submitData = activity;
-  }
+  console.log('[TaskModule] Submit data:', JSON.stringify(submitData, null, 2));
   
   // Parse approvalContext if it's a JSON string
   let approvalContext = submitData.approvalContext;
@@ -172,6 +157,17 @@ async function handleTaskSubmit(context, activity) {
     }
   }
   
+  // Parse cachedResults if it's a JSON string
+  let cachedResults = submitData.cachedResults;
+  if (typeof cachedResults === 'string') {
+    try {
+      cachedResults = JSON.parse(cachedResults);
+    } catch (e) {
+      console.warn('[TaskModule] Failed to parse cachedResults:', e);
+      cachedResults = [];
+    }
+  }
+  
   const { action, searchQuery, selectedUid, approvalId, permission, duration } = submitData;
 
   console.log('[TaskModule] Submit:', { 
@@ -181,14 +177,15 @@ async function handleTaskSubmit(context, activity) {
     approvalId,
     permission,
     duration,
-    hasApprovalContext: !!approvalContext
+    hasApprovalContext: !!approvalContext,
+    hasCachedResults: !!cachedResults
   });
 
   if (action === 'search' || action === 'refine_search') {
-    // User clicked search/refine - return updated results
-    return await handleSearchAction(searchQuery, approvalId, approvalContext || {});
+    // Determine showDuration based on current permission
+    const showDuration = !PERMANENT_ONLY_PERMISSIONS.includes(permission || 'view_only');
+    return await handleSearchAction(searchQuery, approvalId, approvalContext || {}, showDuration, permission);
   } else if (action === 'select_and_approve') {
-    // User selected record and clicked approve
     return await handleSelectAndApprove(context, selectedUid, approvalId, permission, duration, approvalContext || {});
   }
 
@@ -201,213 +198,243 @@ async function handleTaskSubmit(context, activity) {
 }
 
 /**
- * Build search modal (loading or with results)
+ * Build search modal - Slack-style UI layout
+ * IMPORTANT: Keep structure flat and simple for button compatibility
  */
-function buildSearchModal(query, approvalId, isLoading = false, approvalContext = {}) {
-  const card = {
-    type: 'AdaptiveCard',
-    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.5',
-    body: [
+function buildSearchModal(query, approvalId, isLoading = false, approvalContext = {}, results = [], showDuration = true, currentPermission = 'view_only', selectedUid = null) {
+  
+  const body = [];
+  
+  // Search Term section
+  body.push({
+    type: 'TextBlock',
+    text: 'Search Term',
+    weight: 'Bolder',
+  });
+  
+  body.push({
+    type: 'Input.Text',
+    id: 'searchQuery',
+    placeholder: 'Enter record name or UID...',
+    value: query || '',
+  });
+  
+  body.push({
+    type: 'TextBlock',
+    text: 'Modify the search term and click the Refine button below.',
+    wrap: true,
+    isSubtle: true,
+    size: 'Small',
+  });
+  
+  // Inline buttons with spacing: Refine Search + Create New Record
+  body.push({
+    type: 'ColumnSet',
+    columns: [
       {
-        type: 'TextBlock',
-        text: '🔍 Search Records',
-        weight: 'Bolder',
-        size: 'Large',
+        type: 'Column',
+        width: 'auto',
+        items: [
+          {
+            type: 'ActionSet',
+            actions: [
+              {
+                type: 'Action.Submit',
+                title: 'Refine Search',
+                data: { action: 'refine_search' },
+              },
+            ],
+          },
+        ],
       },
       {
-        type: 'TextBlock',
-        text: 'Search for the correct record to approve access',
-        wrap: true,
-        isSubtle: true,
-      },
-      {
-        type: 'Input.Text',
-        id: 'searchQuery',
-        label: 'Search Query',
-        placeholder: 'Enter UID or record name...',
-        value: query || '',
-        isRequired: true,
-      },
-      {
-        type: 'Input.ChoiceSet',
-        id: 'permission',
-        label: 'Permission Level',
-        choices: RECORD_PERMISSIONS,
-        value: 'view_only',
-      },
-      {
-        type: 'Input.ChoiceSet',
-        id: 'duration',
-        label: 'Duration',
-        choices: DURATION_OPTIONS,
-        value: '24h',
+        type: 'Column',
+        width: 'auto',
+        items: [
+          {
+            type: 'ActionSet',
+            actions: [
+              {
+                type: 'Action.Submit',
+                title: 'Create New Record',
+                style: 'positive',
+                data: { action: 'create_new_record' },
+              },
+            ],
+          },
+        ],
       },
     ],
-    actions: [],
-  };
-
+  });
+  
+  body.push({
+    type: 'TextBlock',
+    text: 'Or create a new record and share it',
+    wrap: true,
+    isSubtle: true,
+    size: 'Small',
+  });
+  
+  // Results section
   if (isLoading) {
-    card.body.push({
+    body.push({
       type: 'TextBlock',
       text: '🔄 Searching...',
       color: 'Accent',
       wrap: true,
     });
+  } else if (results.length > 0) {
+    body.push({
+      type: 'TextBlock',
+      text: `Showing ${results.length} result(s) for: **${query}**`,
+      wrap: true,
+    });
+    
+    // Record selection with required indicator
+    body.push({
+      type: 'TextBlock',
+      text: 'Select record: *',
+      weight: 'Bolder',
+    });
+    
+    body.push({
+      type: 'Input.ChoiceSet',
+      id: 'selectedUid',
+      style: 'expanded',
+      choices: results.map(r => ({ 
+        title: `${r.title} (${r.uid})`, 
+        value: r.uid 
+      })),
+      value: selectedUid || '',
+    });
+    
+    // Permission dropdown
+    body.push({
+      type: 'TextBlock',
+      text: 'Select Permission Level',
+      weight: 'Bolder',
+    });
+    
+    body.push({
+      type: 'Input.ChoiceSet',
+      id: 'permission',
+      choices: RECORD_PERMISSIONS,
+      value: currentPermission,
+    });
+    
+    // Duration section (conditional)
+    if (showDuration) {
+      body.push({
+        type: 'TextBlock',
+        text: 'Grant Access For',
+        weight: 'Bolder',
+      });
+      
+      body.push({
+        type: 'Input.ChoiceSet',
+        id: 'duration',
+        choices: DURATION_OPTIONS,
+        value: '1h',
+      });
+      
+      body.push({
+        type: 'TextBlock',
+        text: 'Select how long the access should remain active.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+      });
+    } else {
+      // Permanent access notice
+      body.push({
+        type: 'TextBlock',
+        text: 'ℹ️ **Permanent Access** - This permission does not support time limits.',
+        wrap: true,
+        color: 'Accent',
+      });
+      
+      // Hidden duration value
+      body.push({
+        type: 'Input.Text',
+        id: 'duration',
+        isVisible: false,
+        value: 'permanent',
+      });
+    }
+  } else if (query) {
+    body.push({
+      type: 'TextBlock',
+      text: `❌ No records found matching "${query}"`,
+      color: 'Attention',
+      wrap: true,
+    });
   }
-
-  // Store approval context in hidden field
-  card.body.push({
+  
+  // Hidden context
+  body.push({
     type: 'Input.Text',
     id: 'approvalContext',
     isVisible: false,
     value: JSON.stringify(approvalContext),
   });
+  
+  // Bottom action - only Approve Access (when results exist)
+  const actions = [];
+  if (results && results.length > 0) {
+    actions.push({
+      type: 'Action.Submit',
+      title: 'Approve Access',
+      style: 'positive',
+      data: { action: 'select_and_approve' },
+    });
+  }
+  
+  const card = {
+    type: 'AdaptiveCard',
+    version: '1.2',
+    body: body,
+    actions: actions,
+  };
 
-  card.actions.push({
-    type: 'Action.Submit',
-    title: isLoading ? 'Search' : '🔍 Refine Search',
-    data: {
-      action: isLoading ? 'search' : 'refine_search',
-      approvalId: approvalId,
-      // Include approvalContext in the submit data so it's preserved
-      approvalContext: typeof approvalContext === 'object' ? JSON.stringify(approvalContext) : approvalContext,
-    },
-  });
-
-  // Ensure the response format matches Teams expectations
-  // Teams requires the card to be wrapped with contentType
-  const taskModuleResponse = {
+  return {
     task: {
       type: 'continue',
       value: {
-        title: '🔍 Search Records',
-        height: 500, // Use numeric value for better compatibility
-        width: 600,  // Use numeric value for better compatibility
+        title: 'Search Records',
+        height: 600,
+        width: 450,
         card: {
           contentType: 'application/vnd.microsoft.card.adaptive',
-          content: card, // The Adaptive Card JSON
+          content: card,
         },
       },
     },
   };
-  
-  console.log('[TaskModule] Returning task module response:', JSON.stringify(taskModuleResponse, null, 2).substring(0, 500));
-  
-  return taskModuleResponse;
 }
 
 /**
  * Handle search action - execute search and return results
  */
-async function handleSearchAction(query, approvalId, approvalContext) {
+async function handleSearchAction(query, approvalId, approvalContext, showDuration = true, currentPermission = 'view_only') {
   if (!query || !query.trim()) {
-    return {
-      task: {
-        type: 'continue',
-        value: {
-          title: 'Search Error',
-          card: {
-            contentType: 'application/vnd.microsoft.card.adaptive',
-            content: {
-              type: 'AdaptiveCard',
-              version: '1.5',
-              body: [
-                {
-                  type: 'TextBlock',
-                  text: 'Please enter a search query',
-                  color: 'Attention',
-                },
-              ],
-            },
-          },
-        },
-      },
-    };
+    return buildSearchModal('', approvalId, false, approvalContext, [], showDuration, currentPermission);
   }
 
   console.log('[TaskModule] Executing search for:', query);
 
-  // Try UID first
   let record = await keeperClient.getRecordByUid(query.trim());
   let results = [];
   
   if (record) {
-    results = [record];
+    results = [{ uid: record.uid, title: record.title || record.uid }];
     console.log('[TaskModule] Found record by UID:', record.uid);
   } else {
-    // Search by name/description
-    results = await keeperClient.searchRecords(query, 20);
+    const searchResults = await keeperClient.searchRecords(query, 10);
+    results = searchResults.map(r => ({ uid: r.uid, title: r.title || r.uid }));
     console.log('[TaskModule] Found', results.length, 'records by search');
   }
 
-  // Ensure approvalContext is an object
-  const contextData = approvalContext || {};
-  
-  // Build results section
-  const card = buildSearchModal(query, approvalId, false, contextData);
-  const resultItems = [];
-
-  if (results.length === 0) {
-    resultItems.push({
-      type: 'TextBlock',
-      text: `No records found matching "${query}"`,
-      color: 'Attention',
-      wrap: true,
-    });
-  } else {
-    resultItems.push({
-      type: 'TextBlock',
-      text: `Found ${results.length} result(s):`,
-      weight: 'Bolder',
-      wrap: true,
-    });
-
-    // Add radio buttons for selection
-    const choices = results.map((item) => ({
-      title: `${item.title || item.uid} (${item.uid})`,
-      value: item.uid,
-    }));
-
-    resultItems.push({
-      type: 'Input.ChoiceSet',
-      id: 'selectedUid',
-      label: 'Select Record',
-      style: 'expanded',
-      choices: choices,
-      isRequired: true,
-    });
-
-    resultItems.push({
-      type: 'ActionSet',
-      actions: [
-        {
-          type: 'Action.Submit',
-          title: '✅ Approve Selected Record',
-          style: 'positive',
-          data: {
-            action: 'select_and_approve',
-            approvalId: approvalId,
-            // Include approvalContext so it's available when approving
-            approvalContext: typeof approvalContext === 'object' ? JSON.stringify(approvalContext) : approvalContext,
-          },
-        },
-      ],
-    });
-  }
-
-  // Insert results before actions (after duration selector)
-  // Card structure is now: task.value.card.content (Adaptive Card)
-  const adaptiveCard = card.task.value.card.content;
-  const bodyIndex = adaptiveCard.body.length - 1; // Before hidden approvalContext field
-  adaptiveCard.body.splice(bodyIndex, 0, {
-    type: 'Container',
-    id: 'searchResults',
-    items: resultItems,
-    separator: true,
-  });
-
-  return card;
+  return buildSearchModal(query, approvalId, false, approvalContext, results, showDuration, currentPermission);
 }
 
 /**
@@ -416,7 +443,21 @@ async function handleSearchAction(query, approvalId, approvalContext) {
 async function handleSelectAndApprove(context, selectedUid, approvalId, permission, duration, approvalContext) {
   console.log('[TaskModule] Approving record:', { selectedUid, approvalId, permission, duration });
 
-  // Get record details
+  if (!selectedUid) {
+    return {
+      task: {
+        type: 'message',
+        value: '❌ Please select a record first.',
+      },
+    };
+  }
+
+  // Force permanent duration for permanent-only permissions
+  if (PERMANENT_ONLY_PERMISSIONS.includes(permission)) {
+    console.log(`[TaskModule] Permission "${permission}" is permanent-only, forcing duration to permanent`);
+    duration = 'permanent';
+  }
+
   const record = await keeperClient.getRecordByUid(selectedUid);
   if (!record) {
     return {
@@ -427,29 +468,24 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     };
   }
 
-  // Parse duration
   const durationSeconds = DURATION_MAP[duration] ?? 86400;
 
-  // Get requester email from approval context
+  // Get requester email
   let requesterEmail = approvalContext.requesterEmail;
   
-  // If email is missing, try to fetch it using stored AAD Object ID
   if (!requesterEmail && approvalContext.requesterAadObjectId) {
-    console.log('[TaskModule] Email missing, fetching from Graph API using AAD Object ID...');
+    console.log('[TaskModule] Email missing, fetching from Graph API...');
     try {
       const graphService = require('../services/graphService');
       requesterEmail = await graphService.getUserEmail(approvalContext.requesterAadObjectId);
       if (requesterEmail) {
         console.log(`[TaskModule] Successfully fetched email: ${requesterEmail}`);
-      } else {
-        console.warn('[TaskModule] Graph API returned no email');
       }
     } catch (error) {
-      console.error('[TaskModule] Error fetching email from Graph API:', error.message);
+      console.error('[TaskModule] Error fetching email:', error.message);
     }
   }
   
-  // If email is in old pseudo-format (@users.teams.ms), fetch real email
   if (requesterEmail && requesterEmail.endsWith('@users.teams.ms')) {
     console.log('[TaskModule] Detected old email format, fetching real email...');
     try {
@@ -457,7 +493,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
       const graphService = require('../services/graphService');
       const realEmail = await graphService.getUserEmail(aadObjectId);
       if (realEmail) {
-        console.log(`[TaskModule] Fetched real email: ${realEmail} (was: ${requesterEmail})`);
+        console.log(`[TaskModule] Fetched real email: ${realEmail}`);
         requesterEmail = realEmail;
       }
     } catch (error) {
@@ -469,13 +505,11 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     return {
       task: {
         type: 'message',
-        value: '❌ Error: Missing requester email. Cannot grant access.\n\n' +
-               'The bot needs Microsoft Graph API permissions (User.Read) to fetch user emails.',
+        value: '❌ Error: Missing requester email. Cannot grant access.\n\nThe bot needs Microsoft Graph API permissions (User.Read.All) to fetch user emails.',
       },
     };
   }
 
-  // Grant access
   console.log('[TaskModule] Granting access:', {
     recordUid: selectedUid,
     requesterEmail,
@@ -491,29 +525,21 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   );
 
   if (result.success) {
-    // Update the approval card in the channel
-    // We'll need to send a message to update the original card
-    // For now, return success message
-    
-    const { sendAccessGrantedNotification } = require('../utils/helpers');
-    const requesterId = approvalContext.requesterId;
-    
-    // Send DM to requester
-    if (requesterId) {
-      // Note: We'll need to implement proactive DM sending
-      console.log('[TaskModule] Should send DM to requester:', requesterId);
-    }
+    const durationDisplay = duration === 'permanent' ? 'Permanent' : duration;
+    const permissionDisplay = RECORD_PERMISSIONS.find(p => p.value === permission)?.title || permission;
 
     return {
       task: {
         type: 'continue',
         value: {
-          title: 'Request Approved',
+          title: '✅ Request Approved',
+          height: 300,
+          width: 400,
           card: {
             contentType: 'application/vnd.microsoft.card.adaptive',
             content: {
               type: 'AdaptiveCard',
-              version: '1.5',
+              version: '1.2',
               body: [
                 {
                   type: 'TextBlock',
@@ -524,24 +550,26 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
                 },
                 {
                   type: 'TextBlock',
-                  text: `Access has been granted for record: **${record.title || selectedUid}**`,
+                  text: `Access granted for: **${record.title || selectedUid}**`,
                   wrap: true,
+                  spacing: 'Medium',
                 },
                 {
-                  type: 'TextBlock',
-                  text: `• **Permission:** ${permission}`,
-                  wrap: true,
+                  type: 'FactSet',
+                  spacing: 'Medium',
+                  facts: [
+                    { title: 'Permission', value: permissionDisplay },
+                    { title: 'Duration', value: durationDisplay },
+                    { title: 'Granted To', value: requesterEmail },
+                    { title: 'Expires', value: result.expiresAt || 'Never (Permanent)' },
+                  ],
                 },
+              ],
+              actions: [
                 {
-                  type: 'TextBlock',
-                  text: `• **Duration:** ${duration}`,
-                  wrap: true,
-                },
-                {
-                  type: 'TextBlock',
-                  text: `• **Expires:** ${result.expiresAt || 'Permanent'}`,
-                  wrap: true,
-                  isSubtle: true,
+                  type: 'Action.Submit',
+                  title: 'Close',
+                  data: { action: 'close' },
                 },
               ],
             },
