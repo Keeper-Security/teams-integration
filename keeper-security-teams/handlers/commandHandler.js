@@ -1,11 +1,11 @@
 /**
- * Command Handler
+ * Command Handler for Keeper Security Bot
  * 
- * Handles slash-command style messages from users:
- * - /request-record <uid-or-name> <justification>
- * - /request-folder <uid-or-name> <justification>
- * - /share <uid-or-name> [justification]
- * - /help
+ * Handles commands from users:
+ * - keeper-request-record <name> <justification>
+ * - keeper-request-folder <name> <justification>
+ * - keeper-one-time-share <name> [justification]
+ * - help
  */
 
 const keeperClient = require('../services/keeperClient');
@@ -125,12 +125,12 @@ async function handleRequestRecord(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
   if (!uid) {
-    await context.send('❌ **Usage:** `request-record <record-uid-or-name> <justification>`\n\nExample: `request-record ABC123 Need for deployment`');
+    await context.send('❌ **Usage:** `keeper-request-record <record-name> <justification>`\n\nExample: `keeper-request-record AWS-Prod Need for deployment`');
     return;
   }
   
   if (!justification) {
-    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `request-record <record-uid-or-name> <justification>`');
+    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `keeper-request-record <record-name> <justification>`');
     return;
   }
   
@@ -237,12 +237,12 @@ async function handleRequestFolder(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
   if (!uid) {
-    await context.send('❌ **Usage:** `request-folder <folder-uid-or-name> <justification>`\n\nExample: `request-folder "Engineering Creds" Project onboarding`');
+    await context.send('❌ **Usage:** `keeper-request-folder <folder-name> <justification>`\n\nExample: `keeper-request-folder "Engineering Creds" Project onboarding`');
     return;
   }
   
   if (!justification) {
-    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `request-folder <folder-uid-or-name> <justification>`');
+    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `keeper-request-folder <folder-name> <justification>`');
     return;
   }
   
@@ -348,7 +348,7 @@ async function handleShare(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
   if (!uid) {
-    await context.send('❌ **Usage:** `share <record-uid-or-name> [justification]`\n\nExample: `share XYZ789 Share with contractor`');
+    await context.send('❌ **Usage:** `keeper-one-time-share <record-name> [justification]`\n\nExample: `keeper-one-time-share AWS-Prod Share with contractor`');
     return;
   }
   
@@ -568,18 +568,21 @@ async function routeCommand(context, text) {
   const { command, argsText } = parseCommand(text);
   
   switch (command) {
+    case 'keeper-request-record':
     case 'request-record':
     case 'requestrecord':
     case 'rr':
       await handleRequestRecord(context, argsText);
       return true;
       
+    case 'keeper-request-folder':
     case 'request-folder':
     case 'requestfolder':
     case 'rf':
       await handleRequestFolder(context, argsText);
       return true;
       
+    case 'keeper-one-time-share':
     case 'share':
     case 'one-time-share':
     case 'onetimeshare':

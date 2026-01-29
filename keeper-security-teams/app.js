@@ -71,7 +71,44 @@ const getConversationState = (conversationId) => {
 
 app.on("message", async (context) => {
   const activity = context.activity;
+  
+  // Check if this is a card action (Action.Submit sends data in activity.value)
+  if (activity.value && activity.value.action) {
+    const data = activity.value;
+    const action = data.action;
+    
+    console.log(`[Keeper Bot] Card action in message:`, JSON.stringify(data));
+    
+    // Handle approval/denial actions
+    if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
+      try {
+        console.log(`[Keeper Bot] Routing ${action}`);
+        await handlers.routeApprovalAction(context, data);
+        console.log(`[Keeper Bot] Action ${action} completed`);
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling ${action}:`, error);
+        await context.send(`❌ Error: ${error.message}`);
+      }
+      return;
+    }
+    
+    // Handle search_records action
+    if (action === 'search_records') {
+      console.log('[Keeper Bot] Search records action');
+      const taskModuleResponse = await handlers.handleSearchRecordsAction(context, data);
+      if (taskModuleResponse) {
+        return taskModuleResponse;
+      }
+      return;
+    }
+  }
+  
   const text = stripMentionsText(activity);
+
+  // Skip if no text
+  if (!text) {
+    return;
+  }
 
   console.log(`[Keeper Bot] Received message: "${text}"`);
 
@@ -87,7 +124,7 @@ app.on("message", async (context) => {
   channelService.captureUserReference(context);
 
   // ==================== Built-in Debug Commands ====================
-  
+
   if (text === "/reset") {
     storage.delete(activity.conversation.id);
     await context.send("Ok I've deleted the current conversation state.");
@@ -159,8 +196,8 @@ app.on("message", async (context) => {
     await handlers.handleHelp(context);
   } else {
     // Default echo behavior (can be removed in production)
-    const state = getConversationState(activity.conversation.id);
-    state.count++;
+  const state = getConversationState(activity.conversation.id);
+  state.count++;
     
     await context.send(
       `I didn't recognize that command. Type **help** to see available commands.\n\n` +
@@ -223,6 +260,30 @@ app.on("invoke", async (context) => {
     }
   }
   
+  // Handle adaptiveCard/action (Action.Submit from Adaptive Cards in messages)
+  if (invokeName === 'adaptiveCard/action') {
+    console.log('[Keeper Bot] adaptiveCard/action invoke received');
+    const data = activity.value?.action?.data || activity.value?.data || activity.value || {};
+    const action = data.action;
+    
+    console.log('[Keeper Bot] Action data:', JSON.stringify(data));
+    
+    if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
+      try {
+        console.log(`[Keeper Bot] Routing ${action} from adaptiveCard/action`);
+        await handlers.routeApprovalAction(context, data);
+        console.log(`[Keeper Bot] Action ${action} completed`);
+        return { statusCode: 200 };
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling ${action}:`, error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+  }
+  
+  // Log any unhandled invoke names for debugging
+  console.log('[Keeper Bot] Unhandled invoke name:', invokeName);
+  
   // Return undefined to let other handlers process
   return undefined;
 });
@@ -282,6 +343,11 @@ app.on("cardAction", async (context) => {
 
   const action = data.action;
 
+  if (!action) {
+    console.log('[Keeper Bot] No action in card data, skipping');
+    return;
+  }
+
   // If this action has msteams.task/fetch, it will be handled by invoke handler
   // Don't intercept it here - let Teams convert it to an invoke activity
   if (data.msteams && data.msteams.type === 'task/fetch') {
@@ -302,15 +368,24 @@ app.on("cardAction", async (context) => {
   }
 
   // Route to appropriate handler based on action type
-  if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
-    // Approval/denial actions
-    if (action.includes('record') || action.includes('folder') || action.includes('share')) {
-      await handlers.routeApprovalAction(context, data);
-    } else if (action.includes('pedm')) {
-      await handlers.routePedmAction(context, data);
-    } else if (action.includes('device')) {
-      await handlers.routeDeviceAction(context, data);
+  try {
+    if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
+      console.log(`[Keeper Bot] Routing approval/denial action: ${action}`);
+      // Approval/denial actions
+      if (action.includes('record') || action.includes('folder') || action.includes('share')) {
+        await handlers.routeApprovalAction(context, data);
+        console.log(`[Keeper Bot] Action ${action} completed`);
+      } else if (action.includes('pedm')) {
+        await handlers.routePedmAction(context, data);
+      } else if (action.includes('device')) {
+        await handlers.routeDeviceAction(context, data);
+      }
+    } else {
+      console.log(`[Keeper Bot] Unknown action: ${action}`);
     }
+  } catch (error) {
+    console.error(`[Keeper Bot] Error handling card action:`, error);
+    await context.send(`❌ Error processing action: ${error.message}`);
   }
 });
 

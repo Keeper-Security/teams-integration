@@ -589,6 +589,214 @@ function buildOneTimeShareApprovalCard({
   };
 }
 
+/**
+ * Build a record approval card with status (for updating existing card)
+ * Shows the same card but with APPROVED/DENIED status and no action buttons
+ */
+function buildRecordApprovalCardWithStatus({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  recordTitle,
+  justification,
+  status, // 'approved' or 'denied'
+  approverName,
+  permission,
+  duration,
+  expiresAt,
+  processedTime,
+}) {
+  const statusText = status === 'approved' ? 'APPROVED' : 'DENIED';
+  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  const card = {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.2',
+    body: [
+      // Header
+      {
+        type: 'TextBlock',
+        text: 'Record Access Request',
+        weight: 'Bolder',
+        size: 'ExtraLarge',
+      },
+      // Two-column layout for details
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requesterName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Record:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: recordTitle || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId || 'N/A',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
+            ],
+          },
+        ],
+      },
+      // Status banner
+      {
+        type: 'Container',
+        style: status === 'approved' ? 'good' : 'attention',
+        items: [
+          {
+            type: 'TextBlock',
+            text: statusText,
+            weight: 'Bolder',
+            size: 'Large',
+            horizontalAlignment: 'Center',
+          },
+          {
+            type: 'TextBlock',
+            text: `By: ${approverName || 'Unknown'} at ${time}`,
+            size: 'Small',
+            horizontalAlignment: 'Center',
+            isSubtle: true,
+          },
+        ],
+      },
+    ],
+    // No actions - request has been processed
+    actions: [],
+  };
+  
+  // Add approval details if approved
+  if (status === 'approved') {
+    const detailsItems = [];
+    
+    // Add record name first
+    if (recordTitle) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Access granted for:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: recordTitle, size: 'Small', color: 'Good' }] },
+        ],
+      });
+    }
+    
+    if (permission) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatPermissionLabel(permission), size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (duration) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Duration:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: duration, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (requesterEmail) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Granted To:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: requesterEmail, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (expiresAt) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Expires:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: expiresAt, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (detailsItems.length > 0) {
+      // Insert before the status banner
+      card.body.splice(2, 0, {
+        type: 'Container',
+        spacing: 'Medium',
+        items: detailsItems,
+      });
+    }
+  }
+  
+  return card;
+}
+
+/**
+ * Format permission value to human-readable label
+ */
+function formatPermissionLabel(permission) {
+  const labels = {
+    'view_only': 'View Only',
+    'can_edit': 'Can Edit',
+    'can_share': 'Can Share',
+    'edit_and_share': 'Edit & Share',
+    'change_owner': 'Change Owner',
+  };
+  return labels[permission] || permission;
+}
+
 // Aliases for different naming conventions
 const createRecordApprovalCard = buildRecordApprovalCard;
 const createFolderApprovalCard = buildFolderApprovalCard;
@@ -596,6 +804,7 @@ const createShareApprovalCard = buildOneTimeShareApprovalCard;
 
 module.exports = {
   buildRecordApprovalCard,
+  buildRecordApprovalCardWithStatus,
   buildFolderApprovalCard,
   buildOneTimeShareApprovalCard,
   createRecordApprovalCard,

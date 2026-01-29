@@ -10,6 +10,7 @@ const deviceCard = require('./deviceCard');
 module.exports = {
   // Approval request cards
   buildRecordApprovalCard: approvalCard.buildRecordApprovalCard,
+  buildRecordApprovalCardWithStatus: approvalCard.buildRecordApprovalCardWithStatus,
   buildFolderApprovalCard: approvalCard.buildFolderApprovalCard,
   buildOneTimeShareApprovalCard: approvalCard.buildOneTimeShareApprovalCard,
   createRecordApprovalCard: approvalCard.createRecordApprovalCard,

@@ -345,15 +345,15 @@ function buildHelpCard() {
         type: 'Container',
         items: [
           { type: 'TextBlock', text: '📋 Request Access', weight: 'Bolder', color: 'Accent' },
-          { type: 'TextBlock', text: '• `request-record <uid> <reason>` - Request record access', wrap: true },
-          { type: 'TextBlock', text: '• `request-folder <uid> <reason>` - Request folder access', wrap: true },
+          { type: 'TextBlock', text: '• `keeper-request-record <name> <reason>` - Request record access', wrap: true },
+          { type: 'TextBlock', text: '• `keeper-request-folder <name> <reason>` - Request folder access', wrap: true },
         ],
       },
       {
         type: 'Container',
         items: [
           { type: 'TextBlock', text: '🔗 Share', weight: 'Bolder', color: 'Accent' },
-          { type: 'TextBlock', text: '• `share <uid> [reason]` - Create one-time share link', wrap: true },
+          { type: 'TextBlock', text: '• `keeper-one-time-share <name> [reason]` - Request one-time share link', wrap: true },
         ],
       },
       {

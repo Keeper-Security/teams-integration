@@ -48,6 +48,8 @@ function getApproverInfo(activity) {
  * Handle approval of a record access request
  */
 async function handleRecordApproval(context, data) {
+  console.log('[ApprovalHandler] handleRecordApproval called with data:', JSON.stringify(data));
+  
   const approver = getApproverInfo(context.activity);
   const permission = data.permission || 'view_only';
   const duration = data.duration || '24h';
@@ -57,6 +59,8 @@ async function handleRecordApproval(context, data) {
   const recordTitle = data.recordTitle || recordUid;
   const requesterEmail = data.requesterEmail;
   const requesterName = data.requesterName || 'User';
+  const approvalId = data.approvalId;
+  const justification = data.justification;
   
   if (!recordUid) {
     await context.send('❌ Error: Missing record UID');
@@ -69,8 +73,6 @@ async function handleRecordApproval(context, data) {
   }
   
   // Grant access
-  await context.send('🔄 Granting access...');
-  
   const result = await keeperClient.grantRecordAccess(
     recordUid,
     requesterEmail,
@@ -79,42 +81,60 @@ async function handleRecordApproval(context, data) {
   );
   
   if (result.success) {
-    // Update the card to show approved
-    const approvedCard = cards.buildApprovedMessageCard(
-      approver.name,
-      permission,
-      duration === 'permanent' ? 'Permanent' : duration,
-      recordTitle,
-      'record'
-    );
+    // Format expiry date
+    let expiresAtFormatted = 'Permanent';
+    if (result.expiresAt) {
+      const expiryDate = new Date(result.expiresAt);
+      expiresAtFormatted = expiryDate.toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      });
+    }
     
-    await context.send({
-      type: 'message',
-      attachments: [{
-        contentType: 'application/vnd.microsoft.card.adaptive',
-        content: approvedCard,
-      }],
-    });
-    
-    // Send result notification
-    const resultCard = cards.buildApprovalResultCard({
-      approved: true,
+    // Build the updated card with APPROVED status and all details
+    const updatedCard = cards.buildRecordApprovalCardWithStatus({
+      approvalId: approvalId,
+      requesterName: requesterName,
+      requesterEmail: requesterEmail,
+      recordTitle: recordTitle,
+      justification: justification,
+      status: 'approved',
       approverName: approver.name,
-      itemName: recordTitle,
-      itemType: 'record',
       permission: permission,
       duration: duration === 'permanent' ? 'Permanent' : duration,
-      expiresAt: result.expiresAt,
+      expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
     });
     
-    await context.send({
-      type: 'message',
-      text: '✅ Access granted to ' + requesterName + ' for record **' + recordTitle + '**',
-      attachments: [{
-        contentType: 'application/vnd.microsoft.card.adaptive',
-        content: resultCard,
-      }],
-    });
+    // Try to update the original message
+    try {
+      const activity = context.activity;
+      const updatedActivity = {
+        type: 'message',
+        id: activity.replyToId,
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      };
+      
+      await context.updateActivity(updatedActivity);
+      console.log('[ApprovalHandler] Successfully updated approval card with APPROVED status');
+    } catch (updateError) {
+      console.log('[ApprovalHandler] Failed to update activity, sending new message:', updateError.message);
+      // Fallback: send a new message if update fails
+      await context.send({
+        type: 'message',
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      });
+    }
   } else {
     await context.send('❌ Failed to grant access: ' + result.error);
   }
@@ -124,27 +144,63 @@ async function handleRecordApproval(context, data) {
  * Handle denial of a record access request
  */
 async function handleRecordDenial(context, data) {
+  console.log('[ApprovalHandler] handleRecordDenial called with data:', JSON.stringify(data));
+  
   const approver = getApproverInfo(context.activity);
-  const recordTitle = data.recordTitle || data.recordUid;
+  const recordTitle = data.recordTitle || data.recordUid || 'Unknown Record';
   const requesterName = data.requesterName || 'User';
+  const approvalId = data.approvalId || 'N/A';
+  const justification = data.justification || '';
   
-  // Update the card to show denied
-  const deniedCard = cards.buildDeniedMessageCard(
-    approver.name,
-    null,
+  console.log('[ApprovalHandler] Denying record access:', { approver: approver.name, recordTitle, requesterName });
+  
+  // Build updated card with DENIED status
+  const updatedCard = cards.buildRecordApprovalCardWithStatus({
+    approvalId,
+    requesterName,
     recordTitle,
-    'record'
-  );
-  
-  await context.send({
-    type: 'message',
-    attachments: [{
-      contentType: 'application/vnd.microsoft.card.adaptive',
-      content: deniedCard,
-    }],
+    justification,
+    status: 'denied',
+    approverName: approver.name,
   });
   
-  await context.send('❌ Access request denied for ' + requesterName + ' to record **' + recordTitle + '**');
+  // Try to update the original message
+  const activity = context.activity;
+  if (activity.replyToId) {
+    try {
+      // Update the original card
+      await context.updateActivity({
+        id: activity.replyToId,
+        type: 'message',
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      });
+      console.log('[ApprovalHandler] Updated original card with denied status');
+    } catch (error) {
+      console.error('[ApprovalHandler] Failed to update card, sending new message:', error.message);
+      // Fallback: send as new message
+      await context.send({
+        type: 'message',
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      });
+    }
+  } else {
+    // No replyToId, send as new message
+    await context.send({
+      type: 'message',
+      attachments: [{
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        content: updatedCard,
+      }],
+    });
+  }
+  
+  console.log('[ApprovalHandler] Denial complete');
 }
 
 /**

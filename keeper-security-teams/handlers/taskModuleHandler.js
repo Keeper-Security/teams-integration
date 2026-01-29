@@ -13,6 +13,7 @@
  */
 
 const keeperClient = require('../services/keeperClient');
+const cards = require('../cards');
 
 /**
  * Duration string to seconds mapping
@@ -187,6 +188,9 @@ async function handleTaskSubmit(context, activity) {
     return await handleSearchAction(searchQuery, approvalId, approvalContext || {}, showDuration, permission);
   } else if (action === 'select_and_approve') {
     return await handleSelectAndApprove(context, selectedUid, approvalId, permission, duration, approvalContext || {});
+  } else if (action === 'close') {
+    // Just close the task module
+    return null;
   }
 
   return {
@@ -526,57 +530,55 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
 
   if (result.success) {
     const durationDisplay = duration === 'permanent' ? 'Permanent' : duration;
-    const permissionDisplay = RECORD_PERMISSIONS.find(p => p.value === permission)?.title || permission;
-
-    return {
-      task: {
-        type: 'continue',
-        value: {
-          title: '✅ Request Approved',
-          height: 300,
-          width: 400,
-          card: {
-            contentType: 'application/vnd.microsoft.card.adaptive',
-            content: {
-              type: 'AdaptiveCard',
-              version: '1.2',
-              body: [
-                {
-                  type: 'TextBlock',
-                  text: '✅ Access Granted',
-                  weight: 'Bolder',
-                  size: 'Large',
-                  color: 'Good',
-                },
-                {
-                  type: 'TextBlock',
-                  text: `Access granted for: **${record.title || selectedUid}**`,
-                  wrap: true,
-                  spacing: 'Medium',
-                },
-                {
-                  type: 'FactSet',
-                  spacing: 'Medium',
-                  facts: [
-                    { title: 'Permission', value: permissionDisplay },
-                    { title: 'Duration', value: durationDisplay },
-                    { title: 'Granted To', value: requesterEmail },
-                    { title: 'Expires', value: result.expiresAt || 'Never (Permanent)' },
-                  ],
-                },
-              ],
-              actions: [
-                {
-                  type: 'Action.Submit',
-                  title: 'Close',
-                  data: { action: 'close' },
-                },
-              ],
-            },
-          },
-        },
-      },
-    };
+    
+    // Format expiry date
+    let expiresAtFormatted = null;
+    if (result.expiresAt && duration !== 'permanent') {
+      const expiryDate = new Date(result.expiresAt);
+      expiresAtFormatted = expiryDate.toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      });
+    }
+    
+    // Get approver info
+    const approverName = context.activity.from?.name || 'Unknown';
+    
+    // Build the updated approval card with APPROVED status
+    const updatedCard = cards.buildRecordApprovalCardWithStatus({
+      approvalId: approvalContext.approvalId,
+      requesterName: approvalContext.requesterName,
+      requesterEmail: requesterEmail,
+      recordTitle: record.title || selectedUid,
+      justification: approvalContext.justification,
+      status: 'approved',
+      approverName: approverName,
+      permission: permission,
+      duration: durationDisplay,
+      expiresAt: expiresAtFormatted,
+    });
+    
+    // Send the updated card to the conversation
+    try {
+      await context.send({
+        type: 'message',
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      });
+      console.log('[TaskModule] Sent approval status card to conversation');
+    } catch (sendError) {
+      console.error('[TaskModule] Error sending approval status:', sendError.message);
+    }
+    
+    // Close the task module
+    return null;
   } else {
     return {
       task: {

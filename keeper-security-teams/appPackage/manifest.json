@@ -1,27 +1,27 @@
 {
     "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.24/MicrosoftTeams.schema.json",
     "manifestVersion": "1.24",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "id": "${{TEAMS_APP_ID}}",
     "developer": {
-        "name": "My App, Inc.",
-        "websiteUrl": "https://www.example.com",
-        "privacyUrl": "https://www.example.com/privacy",
-        "termsOfUseUrl": "https://www.example.com/termofuse"
+        "name": "Keeper Security",
+        "websiteUrl": "https://www.keepersecurity.com",
+        "privacyUrl": "https://www.keepersecurity.com/privacy",
+        "termsOfUseUrl": "https://www.keepersecurity.com/termsofuse"
     },
     "icons": {
         "color": "color.png",
         "outline": "outline.png"
     },
     "name": {
-        "short": "keeper-security-teams${{APP_NAME_SUFFIX}}",
-        "full": "full name for keeper-security-teams"
+        "short": "Keeper Security${{APP_NAME_SUFFIX}}",
+        "full": "Keeper Security - Credential Management Bot"
     },
     "description": {
-        "short": "short description for keeper-security-teams",
-        "full": "full description for keeper-security-teams"
+        "short": "Securely request and share credentials via Keeper Vault",
+        "full": "Keeper Security bot for Microsoft Teams. Request access to records and folders, share credentials securely with one-time links, and manage approval workflows directly from Teams."
     },
-    "accentColor": "#FFFFFF",
+    "accentColor": "#0D6EFD",
     "bots": [
         {
             "botId": "${{BOT_ID}}",
@@ -37,12 +37,20 @@
                   "scopes": ["personal", "team", "groupChat"],
                   "commands": [
                       {
-                          "title": "Hi",
-                          "description": "Say hi to the bot."
+                          "title": "keeper-request-record",
+                          "description": "Request access to a record. Usage: keeper-request-record <record-name> <justification>"
                       },
                       {
-                          "title": "/reset",
-                          "description": "Delete conversation state."
+                          "title": "keeper-request-folder",
+                          "description": "Request access to a folder. Usage: keeper-request-folder <folder-name> <justification>"
+                      },
+                      {
+                          "title": "keeper-one-time-share",
+                          "description": "Request a one-time share link. Usage: keeper-one-time-share <record-name> [justification]"
+                      },
+                      {
+                          "title": "help",
+                          "description": "Show available commands and usage."
                       }
                   ]
                 }
