@@ -556,6 +556,161 @@ function getRecordIcon(recordType) {
   return icons[recordType] || '🔐';
 }
 
+/**
+ * Build a notification card for the requester after approval/denial
+ * This is sent as a DM to the person who originally requested access
+ */
+function buildRequesterNotificationCard({
+  approved,
+  recordTitle,
+  permission,
+  duration,
+  expiresAt,
+  approverName,
+  denialReason,
+}) {
+  const statusText = approved ? 'Your Access Request Has Been Approved!' : 'Your Access Request Has Been Denied';
+  const containerStyle = approved ? 'good' : 'attention';
+  
+  const body = [
+    // Header with status
+    {
+      type: 'Container',
+      style: containerStyle,
+      items: [
+        {
+          type: 'TextBlock',
+          text: statusText,
+          weight: 'Bolder',
+          size: 'Large',
+          wrap: true,
+        },
+      ],
+    },
+    // Record info
+    {
+      type: 'Container',
+      spacing: 'Medium',
+      items: [
+        {
+          type: 'ColumnSet',
+          columns: [
+            {
+              type: 'Column',
+              width: 'auto',
+              items: [{ type: 'TextBlock', text: 'Record:', weight: 'Bolder' }],
+            },
+            {
+              type: 'Column',
+              width: 'stretch',
+              items: [{ type: 'TextBlock', text: recordTitle || 'Unknown', color: 'Accent', wrap: true }],
+            },
+          ],
+        },
+        {
+          type: 'ColumnSet',
+          columns: [
+            {
+              type: 'Column',
+              width: 'auto',
+              items: [{ type: 'TextBlock', text: 'Reviewed by:', weight: 'Bolder' }],
+            },
+            {
+              type: 'Column',
+              width: 'stretch',
+              items: [{ type: 'TextBlock', text: approverName || 'Unknown' }],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  
+  if (approved) {
+    // Add approval details
+    body.push({
+      type: 'Container',
+      spacing: 'Medium',
+      separator: true,
+      items: [
+        {
+          type: 'TextBlock',
+          text: 'Access Details',
+          weight: 'Bolder',
+          color: 'Good',
+        },
+        {
+          type: 'FactSet',
+          facts: [
+            { title: 'Permission', value: formatPermission(permission) },
+            { title: 'Duration', value: duration || 'Permanent' },
+            ...(expiresAt ? [{ title: 'Expires', value: expiresAt }] : [{ title: 'Expires', value: 'Never (Permanent)' }]),
+          ],
+        },
+      ],
+    });
+    
+    // Add helpful message
+    body.push({
+      type: 'Container',
+      spacing: 'Medium',
+      items: [
+        {
+          type: 'TextBlock',
+          text: '💡 You now have access to this record in your Keeper vault.',
+          wrap: true,
+          isSubtle: true,
+          size: 'Small',
+        },
+      ],
+    });
+  } else {
+    // Add denial info
+    if (denialReason) {
+      body.push({
+        type: 'Container',
+        spacing: 'Medium',
+        separator: true,
+        items: [
+          {
+            type: 'TextBlock',
+            text: 'Reason:',
+            weight: 'Bolder',
+          },
+          {
+            type: 'TextBlock',
+            text: denialReason,
+            wrap: true,
+            color: 'Attention',
+          },
+        ],
+      });
+    }
+    
+    // Add helpful message for denial
+    body.push({
+      type: 'Container',
+      spacing: 'Medium',
+      items: [
+        {
+          type: 'TextBlock',
+          text: '💡 You can submit a new request with additional justification if needed.',
+          wrap: true,
+          isSubtle: true,
+          size: 'Small',
+        },
+      ],
+    });
+  }
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.2',
+    body: body,
+  };
+}
+
 // Aliases
 const createShareResultCard = buildShareResultCard;
 const createSearchResultsCard = buildSearchResultsCard;
@@ -569,6 +724,7 @@ module.exports = {
   buildErrorCard,
   buildApprovedMessageCard,
   buildDeniedMessageCard,
+  buildRequesterNotificationCard,
   createShareResultCard,
   createSearchResultsCard,
   createHelpCard,

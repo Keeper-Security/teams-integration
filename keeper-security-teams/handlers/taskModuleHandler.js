@@ -14,6 +14,7 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
+const { getChannelService } = require('../services');
 
 /**
  * Duration string to seconds mapping
@@ -575,6 +576,40 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
       console.log('[TaskModule] Sent approval status card to conversation');
     } catch (sendError) {
       console.error('[TaskModule] Error sending approval status:', sendError.message);
+    }
+    
+    // Send DM notification to the requester
+    const requesterId = approvalContext.requesterId;
+    if (requesterId) {
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const notificationCard = cards.buildRequesterNotificationCard({
+            approved: true,
+            recordTitle: record.title || selectedUid,
+            permission: permission,
+            duration: durationDisplay,
+            expiresAt: expiresAtFormatted,
+            approverName: approverName,
+          });
+          
+          const notificationSent = await channelService.sendDirectMessage(requesterId, {
+            type: 'message',
+            attachments: [{
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: notificationCard,
+            }],
+          });
+          
+          if (notificationSent) {
+            console.log(`[TaskModule] Sent approval notification to requester: ${requesterId}`);
+          } else {
+            console.log(`[TaskModule] Could not send notification to requester (no reference stored)`);
+          }
+        }
+      } catch (notifyError) {
+        console.error('[TaskModule] Error sending requester notification:', notifyError.message);
+      }
     }
     
     // Close the task module

@@ -142,7 +142,6 @@ async function handleRequestRecord(context, argsText) {
   
   if (isUidFormat) {
     // Try to get record by UID
-    await context.send('🔍 Looking up record...');
     record = await keeperClient.getRecordByUid(uid.trim());
     if (record) {
       recordUid = record.uid;
@@ -201,7 +200,7 @@ async function handleRequestRecord(context, argsText) {
   if (sentToChannel) {
     // Approval sent to dedicated channel - notify requester
     await context.send(
-      '✅ **Access request submitted!**\n\n' +
+      '**Access request submitted!**\n\n' +
       `• **Request ID:** \`${approvalId}\`\n` +
       `• **Record:** ${record?.title || uid}\n` +
       `• **Justification:** ${justification}\n\n` +
@@ -220,7 +219,7 @@ async function handleRequestRecord(context, argsText) {
     
     const displayTitle = record?.title || recordTitle || uid;
     await context.send(
-      '✅ Access request submitted for **' + displayTitle + '**\n\n' +
+      'Access request submitted for **' + displayTitle + '**\n\n' +
       'An administrator will review your request.\n\n' +
       '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
     );
@@ -245,9 +244,6 @@ async function handleRequestFolder(context, argsText) {
     await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `keeper-request-folder <folder-name> <justification>`');
     return;
   }
-  
-  // Look up the folder
-  await context.send('🔍 Looking up folder...');
   
   let folder = await keeperClient.getFolderByUid(uid);
   
@@ -313,7 +309,7 @@ async function handleRequestFolder(context, argsText) {
   if (sentToChannel) {
     // Approval sent to dedicated channel - notify requester
     await context.send(
-      '✅ **Folder access request submitted!**\n\n' +
+      '**Folder access request submitted!**\n\n' +
       `• **Request ID:** \`${approvalId}\`\n` +
       `• **Folder:** ${folder?.name || uid}\n` +
       `• **Justification:** ${justification}\n\n` +
@@ -331,7 +327,7 @@ async function handleRequestFolder(context, argsText) {
     });
     
     await context.send(
-      '✅ Access request submitted for folder **' + (folder?.name || uid) + '**\n\n' +
+      'Access request submitted for folder **' + (folder?.name || uid) + '**\n\n' +
       'An administrator will review your request.\n\n' +
       '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
     );
@@ -351,9 +347,6 @@ async function handleShare(context, argsText) {
     await context.send('❌ **Usage:** `keeper-one-time-share <record-name> [justification]`\n\nExample: `keeper-one-time-share AWS-Prod Share with contractor`');
     return;
   }
-  
-  // Look up the record
-  await context.send('🔍 Looking up record...');
   
   let record = await keeperClient.getRecordByUid(uid);
   

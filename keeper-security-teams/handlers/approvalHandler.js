@@ -10,6 +10,7 @@
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
 const config = require('../config');
+const { getChannelService } = require('../services');
 
 /**
  * Duration string to seconds mapping
@@ -135,6 +136,40 @@ async function handleRecordApproval(context, data) {
         }],
       });
     }
+    
+    // Send DM notification to the requester
+    const requesterId = data.requesterId;
+    if (requesterId) {
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const notificationCard = cards.buildRequesterNotificationCard({
+            approved: true,
+            recordTitle: recordTitle,
+            permission: permission,
+            duration: duration === 'permanent' ? 'Permanent' : duration,
+            expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+            approverName: approver.name,
+          });
+          
+          const notificationSent = await channelService.sendDirectMessage(requesterId, {
+            type: 'message',
+            attachments: [{
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: notificationCard,
+            }],
+          });
+          
+          if (notificationSent) {
+            console.log(`[ApprovalHandler] Sent approval notification to requester: ${requesterId}`);
+          } else {
+            console.log(`[ApprovalHandler] Could not send notification to requester (no reference stored)`);
+          }
+        }
+      } catch (notifyError) {
+        console.error('[ApprovalHandler] Error sending requester notification:', notifyError.message);
+      }
+    }
   } else {
     await context.send('❌ Failed to grant access: ' + result.error);
   }
@@ -198,6 +233,38 @@ async function handleRecordDenial(context, data) {
         content: updatedCard,
       }],
     });
+  }
+  
+  // Send DM notification to the requester
+  const requesterId = data.requesterId;
+  if (requesterId) {
+    try {
+      const channelService = getChannelService();
+      if (channelService) {
+        const notificationCard = cards.buildRequesterNotificationCard({
+          approved: false,
+          recordTitle: recordTitle,
+          approverName: approver.name,
+          denialReason: data.denialReason || null,
+        });
+        
+        const notificationSent = await channelService.sendDirectMessage(requesterId, {
+          type: 'message',
+          attachments: [{
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: notificationCard,
+          }],
+        });
+        
+        if (notificationSent) {
+          console.log(`[ApprovalHandler] Sent denial notification to requester: ${requesterId}`);
+        } else {
+          console.log(`[ApprovalHandler] Could not send notification to requester (no reference stored)`);
+        }
+      }
+    } catch (notifyError) {
+      console.error('[ApprovalHandler] Error sending requester notification:', notifyError.message);
+    }
   }
   
   console.log('[ApprovalHandler] Denial complete');

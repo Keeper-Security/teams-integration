@@ -25,6 +25,7 @@ module.exports = {
   buildErrorCard: resultCard.buildErrorCard,
   buildApprovedMessageCard: resultCard.buildApprovedMessageCard,
   buildDeniedMessageCard: resultCard.buildDeniedMessageCard,
+  buildRequesterNotificationCard: resultCard.buildRequesterNotificationCard,
   createShareResultCard: resultCard.createShareResultCard,
   createSearchResultsCard: resultCard.createSearchResultsCard,
   createHelpCard: resultCard.createHelpCard,
