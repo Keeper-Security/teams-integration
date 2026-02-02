@@ -8,13 +8,47 @@
  * this service routes approval requests to a dedicated Teams channel.
  */
 
+const { MicrosoftAppCredentials, ConnectorClient } = require('botframework-connector');
 const config = require('../config');
+
+// Cache for connector clients by service URL
+const connectorClients = new Map();
+
+/**
+ * Get or create a ConnectorClient for the given service URL
+ * @param {string} serviceUrl - The Bot Framework service URL
+ * @returns {ConnectorClient}
+ */
+function getConnectorClient(serviceUrl) {
+  if (!connectorClients.has(serviceUrl)) {
+    // Trust the service URL (required for Teams)
+    MicrosoftAppCredentials.trustServiceUrl(serviceUrl);
+    
+    // Create credentials
+    const credentials = new MicrosoftAppCredentials(
+      config.MicrosoftAppId,
+      config.MicrosoftAppPassword
+    );
+    
+    // Create connector client
+    const client = new ConnectorClient(credentials, { baseUri: serviceUrl });
+    connectorClients.set(serviceUrl, client);
+  }
+  
+  return connectorClients.get(serviceUrl);
+}
 
 /**
  * In-memory store for conversation references
  * In production, this should be persisted to a database
  */
 const conversationReferences = new Map();
+
+/**
+ * In-memory store for approval card activity IDs
+ * Maps approvalId -> activityId for updating cards later
+ */
+const approvalActivityMap = new Map();
 
 /**
  * Store a conversation reference
@@ -24,6 +58,33 @@ const conversationReferences = new Map();
 function storeConversationReference(key, reference) {
   conversationReferences.set(key, reference);
   console.log(`[ChannelService] Stored conversation reference for: ${key}`);
+}
+
+/**
+ * Store an approval card's activity ID for later updates
+ * @param {string} approvalId - The approval request ID
+ * @param {string} activityId - The Teams activity ID of the card message
+ */
+function storeApprovalActivityId(approvalId, activityId) {
+  approvalActivityMap.set(approvalId, activityId);
+  console.log(`[ChannelService] Stored activity ID for approval ${approvalId}: ${activityId}`);
+}
+
+/**
+ * Get the activity ID for an approval card
+ * @param {string} approvalId - The approval request ID
+ * @returns {string|null} - The activity ID or null
+ */
+function getApprovalActivityId(approvalId) {
+  return approvalActivityMap.get(approvalId) || null;
+}
+
+/**
+ * Remove an approval activity mapping (after it's been processed)
+ * @param {string} approvalId - The approval request ID
+ */
+function removeApprovalActivityId(approvalId) {
+  approvalActivityMap.delete(approvalId);
 }
 
 /**
@@ -230,6 +291,195 @@ class ChannelService {
   }
 
   /**
+   * Send an Adaptive Card to the approvals channel using Teams SDK app.send()
+   * Then use Bot Connector Client to get the activity ID for later updates
+   * @param {Object} card - Adaptive Card object
+   * @param {string} approvalId - The approval request ID (for storing activity ID mapping)
+   * @param {string} [preText] - Optional text to show before card
+   * @returns {Promise<{success: boolean, activityId: string|null}>}
+   */
+  async sendApprovalCardViaConnector(card, approvalId, preText = null) {
+    const approvalsRef = getConversationReference('approvals');
+    
+    if (!approvalsRef) {
+      console.warn('[ChannelService] No approvals channel reference stored.');
+      return { success: false, activityId: null };
+    }
+
+    if (!this.app) {
+      console.error('[ChannelService] App not initialized');
+      return { success: false, activityId: null };
+    }
+
+    try {
+      // Build the activity
+      const activity = {
+        type: 'message',
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: card,
+        }],
+      };
+
+      if (preText) {
+        activity.text = preText;
+      }
+
+      // Use Teams SDK app.send() for sending (this works for proactive messaging)
+      const conversationId = approvalsRef.conversation.id;
+      const response = await this.app.send(conversationId, activity);
+      
+      // Log the response to see what we get back
+      console.log('[ChannelService] app.send() response:', JSON.stringify(response));
+      console.log('[ChannelService] app.send() response type:', typeof response);
+      
+      // Try to extract activity ID from response
+      let activityId = null;
+      if (response) {
+        if (typeof response === 'string') {
+          activityId = response;
+        } else if (response.id) {
+          activityId = response.id;
+        } else if (response.activityId) {
+          activityId = response.activityId;
+        }
+        
+        // Fallback: Extract messageid from conversation.id
+        // Format: "19:xxx@thread.tacv2;messageid=1770017086743"
+        if (!activityId && response.conversation?.id) {
+          const match = response.conversation.id.match(/messageid=(\d+)/);
+          if (match) {
+            activityId = match[1];
+            console.log('[ChannelService] Extracted activityId from conversation.id:', activityId);
+          }
+        }
+      }
+      
+      console.log('[ChannelService] Final extracted activityId:', activityId);
+      
+      // Store the mapping of approvalId -> activityId for later updates
+      if (approvalId && activityId) {
+        storeApprovalActivityId(approvalId, activityId);
+        console.log(`[ChannelService] Stored activity mapping: ${approvalId} -> ${activityId}`);
+      } else {
+        console.warn('[ChannelService] Could not store activity mapping - no activityId returned');
+      }
+      
+      return { success: true, activityId: activityId };
+    } catch (error) {
+      console.error('[ChannelService] Error sending via app.send():', error.message);
+      return { success: false, activityId: null };
+    }
+  }
+
+  /**
+   * Update an activity using Teams SDK API
+   * @param {string} activityId - The activity ID to update
+   * @param {Object} updatedCard - The updated Adaptive Card
+   * @returns {Promise<boolean>}
+   */
+  async updateApprovalCard(activityId, updatedCard) {
+    const approvalsRef = getConversationReference('approvals');
+    
+    if (!approvalsRef || !approvalsRef.serviceUrl) {
+      console.error('[ChannelService] Missing approvals reference or serviceUrl');
+      return false;
+    }
+
+    if (!this.app) {
+      console.error('[ChannelService] App not initialized for update');
+      return false;
+    }
+
+    // Get the base conversation ID (without messageid suffix)
+    let conversationId = approvalsRef.conversation.id;
+    // Remove any ";messageid=xxx" suffix if present
+    if (conversationId.includes(';messageid=')) {
+      conversationId = conversationId.split(';messageid=')[0];
+    }
+
+    console.log('[ChannelService] Attempting update:', {
+      serviceUrl: approvalsRef.serviceUrl,
+      conversationId,
+      activityId,
+    });
+
+    try {
+      // Build the updated activity
+      const activity = {
+        type: 'message',
+        id: activityId,
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      };
+
+      // Try using the app's API client first
+      // The API client should use the same auth mechanism as app.send()
+      if (this.app.api && this.app.api.conversations) {
+        console.log('[ChannelService] Using app.api.conversations for update');
+        const result = await this.app.api.conversations.activities(conversationId).update(
+          activityId,
+          activity
+        );
+        console.log('[ChannelService] Activity updated via Teams SDK API, activityId:', activityId);
+        console.log('[ChannelService] Update result:', JSON.stringify(result));
+        return true;
+      }
+      
+      // Fallback: Try using the app's client directly
+      // Create an API client with the correct service URL and the app's HTTP client
+      console.log('[ChannelService] app.api.conversations not available, trying direct client');
+      const { Client: ApiClient } = require('@microsoft/teams.api');
+      const apiClient = new ApiClient(approvalsRef.serviceUrl, this.app.client);
+      
+      const result = await apiClient.conversations.activities(conversationId).update(
+        activityId,
+        activity
+      );
+      
+      console.log('[ChannelService] Activity updated via direct API client, activityId:', activityId);
+      console.log('[ChannelService] Update result:', JSON.stringify(result));
+      return true;
+    } catch (error) {
+      console.error('[ChannelService] Error updating activity:', error.message);
+      console.error('[ChannelService] Error stack:', error.stack);
+      
+      // Last resort: Try using the ConnectorClient
+      try {
+        console.log('[ChannelService] Trying ConnectorClient as last resort');
+        const client = getConnectorClient(approvalsRef.serviceUrl);
+        
+        const fullActivity = {
+          type: 'message',
+          id: activityId,
+          from: approvalsRef.bot,
+          conversation: { id: conversationId },
+          channelId: approvalsRef.channelId,
+          serviceUrl: approvalsRef.serviceUrl,
+          attachments: [{
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: updatedCard,
+          }],
+        };
+
+        await client.conversations.updateActivity(
+          conversationId,
+          activityId,
+          fullActivity
+        );
+        
+        console.log('[ChannelService] Activity updated via ConnectorClient (last resort)');
+        return true;
+      } catch (connectorError) {
+        console.error('[ChannelService] ConnectorClient also failed:', connectorError.message);
+        return false;
+      }
+    }
+  }
+
+  /**
    * Send a Direct Message (1:1) to a user
    * @param {string} userId - Teams user ID
    * @param {Object|string} message - Message to send
@@ -304,4 +554,7 @@ module.exports = {
   extractConversationReference,
   isApprovalsChannel,
   isTeamsChannel,
+  storeApprovalActivityId,
+  getApprovalActivityId,
+  removeApprovalActivityId,
 };

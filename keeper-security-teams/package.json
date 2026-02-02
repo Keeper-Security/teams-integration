@@ -2,7 +2,7 @@
     "name": "kstestjs",
     "version": "1.0.0",
     "msteams": {
-      "teamsAppId": null
+        "teamsAppId": null
     },
     "description": "Microsoft 365 Agents Toolkit echo bot sample",
     "author": "Microsoft",
@@ -21,7 +21,8 @@
         "@azure/identity": "^4.11.1",
         "@microsoft/teams.apps": "^2.0.0",
         "@microsoft/teams.common": "^2.0.0",
-        "axios": "^1.6.0"
+        "axios": "^1.6.0",
+        "botbuilder": "^4.23.3"
     },
     "devDependencies": {
         "env-cmd": "^10.1.0",

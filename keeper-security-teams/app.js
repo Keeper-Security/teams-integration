@@ -101,6 +101,16 @@ app.on("message", async (context) => {
       }
       return;
     }
+    
+    // Handle search_folders action
+    if (action === 'search_folders') {
+      console.log('[Keeper Bot] Search folders action');
+      const taskModuleResponse = await handlers.handleSearchFoldersAction(context, data);
+      if (taskModuleResponse) {
+        return taskModuleResponse;
+      }
+      return;
+    }
   }
   
   const text = stripMentionsText(activity);
@@ -260,19 +270,35 @@ app.on("invoke", async (context) => {
     }
   }
   
-  // Handle adaptiveCard/action (Action.Submit from Adaptive Cards in messages)
+  // Handle adaptiveCard/action (Action.Execute from Adaptive Cards)
   if (invokeName === 'adaptiveCard/action') {
     console.log('[Keeper Bot] adaptiveCard/action invoke received');
+    const verb = activity.value?.action?.verb;
     const data = activity.value?.action?.data || activity.value?.data || activity.value || {};
-    const action = data.action;
+    const action = data.action || verb;
     
+    console.log('[Keeper Bot] Action verb:', verb);
     console.log('[Keeper Bot] Action data:', JSON.stringify(data));
     
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
       try {
-        console.log(`[Keeper Bot] Routing ${action} from adaptiveCard/action`);
-        await handlers.routeApprovalAction(context, data);
-        console.log(`[Keeper Bot] Action ${action} completed`);
+        console.log(`[Keeper Bot] Processing ${action} from adaptiveCard/action (Universal Action)`);
+        
+        // Call the handler and get the updated card
+        const result = await handlers.routeApprovalActionWithCardResponse(context, data);
+        
+        console.log(`[Keeper Bot] Action ${action} completed, returning updated card`);
+        
+        // Return the updated card - Teams will automatically update the original card
+        if (result && result.updatedCard) {
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: result.updatedCard,
+          };
+        }
+        
+        // Fallback: just acknowledge
         return { statusCode: 200 };
       } catch (error) {
         console.error(`[Keeper Bot] Error handling ${action}:`, error);
@@ -361,6 +387,16 @@ app.on("cardAction", async (context) => {
   if (action === 'search_records') {
     console.log('[Keeper Bot] Search records action without msteams, handling manually');
     const taskModuleResponse = await handlers.handleSearchRecordsAction(context, data);
+    if (taskModuleResponse) {
+      return taskModuleResponse;
+    }
+    return;
+  }
+  
+  // Handle search_folders action without msteams (fallback)
+  if (action === 'search_folders') {
+    console.log('[Keeper Bot] Search folders action without msteams, handling manually');
+    const taskModuleResponse = await handlers.handleSearchFoldersAction(context, data);
     if (taskModuleResponse) {
       return taskModuleResponse;
     }

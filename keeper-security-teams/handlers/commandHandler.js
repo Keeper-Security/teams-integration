@@ -185,10 +185,17 @@ async function handleRequestRecord(context, argsText) {
     const canSend = status.approvalsChannelReady && status.appReady;
     
     if (canSend) {
-      sentToChannel = await channelService.sendApprovalCard(
+      // Use connector-based method for sending - this allows us to update the card later
+      const result = await channelService.sendApprovalCardViaConnector(
         approvalCard,
+        approvalId,
         `📋 New record access request from **${userInfo.userName}**`
       );
+      sentToChannel = result.success;
+      
+      if (result.activityId) {
+        console.log(`[CommandHandler] Approval card sent with activityId: ${result.activityId}`);
+      }
     } else {
       console.log('[CommandHandler] Cannot send to approvals channel:', {
         approvalsReady: status.approvalsChannelReady,
@@ -200,7 +207,7 @@ async function handleRequestRecord(context, argsText) {
   if (sentToChannel) {
     // Approval sent to dedicated channel - notify requester
     await context.send(
-      '**Access request submitted!**\n\n' +
+      '**Record access request submitted!**\n\n' +
       `• **Request ID:** \`${approvalId}\`\n` +
       `• **Record:** ${record?.title || uid}\n` +
       `• **Justification:** ${justification}\n\n` +
@@ -245,28 +252,26 @@ async function handleRequestFolder(context, argsText) {
     return;
   }
   
-  let folder = await keeperClient.getFolderByUid(uid);
+  // Check if identifier is a UID or description
+  const isUidFormat = isUid(uid.trim());
+  let folder = null;
+  let folderUid = null;
+  let folderName = uid; // Default to the identifier
   
-  if (!folder) {
-    // Try searching by name
-    const searchResults = await keeperClient.searchFolders(uid, 5);
-    
-    if (searchResults.length === 0) {
-      await context.send('❌ Folder not found: `' + uid + '`\n\nPlease check the UID or name and try again.');
-      return;
+  if (isUidFormat) {
+    // Try to get folder by UID
+    folder = await keeperClient.getFolderByUid(uid.trim());
+    if (folder) {
+      folderUid = folder.uid;
+      folderName = folder.name;
     }
-    
-    if (searchResults.length === 1) {
-      folder = searchResults[0];
-    } else {
-      // Multiple matches - show options
-      let message = '⚠️ Multiple folders found. Please use the exact UID:\n\n';
-      for (const f of searchResults) {
-        message += '• `' + f.uid + '` - ' + f.name + '\n';
-      }
-      await context.send(message);
-      return;
-    }
+  }
+  
+  // If not found by UID or not a UID format, treat as description
+  if (!folder && isUidFormat) {
+    // UID format but not found - might be invalid
+    await context.send('❌ Folder not found: `' + uid + '`\n\nPlease check the UID and try again.');
+    return;
   }
   
   // Get user info
@@ -274,15 +279,19 @@ async function handleRequestFolder(context, argsText) {
   const approvalId = generateApprovalId();
   
   // Build approval card
+  // If not a UID or UID not found, pass isUid=false and identifier
   const approvalCard = cards.createFolderApprovalCard({
     approvalId,
-    folderUid: folder?.uid || uid,
-    folderName: folder?.name || uid,
+    folderUid: folderUid || uid, // Use actual UID if found, otherwise identifier
+    folderName: folderName,
     folderType: folder?.folderType || 'shared_folder',
     requesterName: userInfo.userName,
     requesterId: userInfo.teamsUserId,
     requesterEmail: userInfo.userEmail,
+    requesterAadObjectId: context.activity.from?.aadObjectId, // Extract AAD Object ID for email fetching fallback
     justification,
+    isUid: isUidFormat && !!folder, // True only if UID format AND found
+    identifier: uid, // Always pass the original identifier
   });
   
   // Try to send to approvals channel (like Slack does)
@@ -294,10 +303,17 @@ async function handleRequestFolder(context, argsText) {
     const canSend = status.approvalsChannelReady && status.appReady;
     
     if (canSend) {
-      sentToChannel = await channelService.sendApprovalCard(
+      // Use connector-based method for sending - this allows us to update the card later
+      const result = await channelService.sendApprovalCardViaConnector(
         approvalCard,
+        approvalId,
         `📁 New folder access request from **${userInfo.userName}**`
       );
+      sentToChannel = result.success;
+      
+      if (result.activityId) {
+        console.log(`[CommandHandler] Folder approval card sent with activityId: ${result.activityId}`);
+      }
     } else {
       console.log('[CommandHandler] Cannot send to approvals channel:', {
         approvalsReady: status.approvalsChannelReady,
@@ -317,7 +333,7 @@ async function handleRequestFolder(context, argsText) {
       'You will be notified when an administrator approves or denies your request.'
     );
   } else {
-    // Fallback: send to current conversation
+    // Fallback: send to current conversation (for testing or when channel not configured)
     await context.send({
       type: 'message',
       attachments: [{
@@ -326,8 +342,9 @@ async function handleRequestFolder(context, argsText) {
       }],
     });
     
+    const displayName = folder?.name || folderName || uid;
     await context.send(
-      'Access request submitted for folder **' + (folder?.name || uid) + '**\n\n' +
+      'Access request submitted for folder **' + displayName + '**\n\n' +
       'An administrator will review your request.\n\n' +
       '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
     );

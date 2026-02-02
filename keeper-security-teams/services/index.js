@@ -13,6 +13,9 @@ const {
   getConversationReference,
   isApprovalsChannel,
   isTeamsChannel,
+  storeApprovalActivityId,
+  getApprovalActivityId,
+  removeApprovalActivityId,
 } = require('./channelService');
 
 module.exports = {
@@ -26,4 +29,7 @@ module.exports = {
   getConversationReference,
   isApprovalsChannel,
   isTeamsChannel,
+  storeApprovalActivityId,
+  getApprovalActivityId,
+  removeApprovalActivityId,
 };

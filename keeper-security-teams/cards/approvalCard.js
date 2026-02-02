@@ -63,7 +63,7 @@ function buildRecordApprovalCard({
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.4',
     body: [
       // Header
       {
@@ -271,9 +271,10 @@ function buildRecordApprovalCard({
     // Only Deny button at bottom
     card.actions = [
       {
-        type: 'Action.Submit',
+        type: 'Action.Execute',
         title: 'Deny Request',
         style: 'destructive',
+        verb: 'deny_record',
         data: {
           action: 'deny_record',
           approvalId: approvalId,
@@ -291,127 +292,156 @@ function buildRecordApprovalCard({
 
 /**
  * Build an Adaptive Card for folder access approval request
+ * Slack-style layout with two columns (matching record card style)
  */
 function buildFolderApprovalCard({
   approvalId,
   requesterName,
   requesterId,
   requesterEmail,
+  requesterAadObjectId,
   folderName,
   folderUid,
   folderType = 'shared_folder',
   justification,
+  isUid = true,
+  identifier,
 }) {
-  return {
+  // Format timestamp
+  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.5',
+    version: '1.4',
     body: [
+      // Header
       {
-        type: 'Container',
-        style: 'emphasis',
-        items: [
+        type: 'TextBlock',
+        text: 'Folder Access Request',
+        weight: 'Bolder',
+        size: 'ExtraLarge',
+      },
+      // Two-column layout for details
+      {
+        type: 'ColumnSet',
+        columns: [
           {
-            type: 'ColumnSet',
-            columns: [
+            type: 'Column',
+            width: 'stretch',
+            items: [
               {
-                type: 'Column',
-                width: 'auto',
-                items: [
-                  {
-                    type: 'TextBlock',
-                    text: '📁',
-                    size: 'ExtraLarge',
-                  },
-                ],
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
               },
               {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  {
-                    type: 'TextBlock',
-                    text: 'Folder Access Request',
-                    weight: 'Bolder',
-                    size: 'Large',
-                    color: 'Accent',
-                  },
-                  {
-                    type: 'TextBlock',
-                    text: 'ID: ' + approvalId,
-                    size: 'Small',
-                    isSubtle: true,
-                  },
-                ],
+                type: 'TextBlock',
+                text: requesterName,
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Folder:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: identifier || folderName,
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Requested:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requestedTime,
+                size: 'Medium',
               },
             ],
           },
-        ],
-      },
-      {
-        type: 'Container',
-        items: [
           {
-            type: 'FactSet',
-            facts: [
-              { title: 'Requester', value: requesterName },
-              { title: 'Folder', value: folderName },
-              { title: 'Folder UID', value: folderUid },
-              { title: 'Type', value: folderType },
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId,
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
             ],
-          },
-        ],
-      },
-      {
-        type: 'Container',
-        items: [
-          {
-            type: 'TextBlock',
-            text: 'Justification',
-            weight: 'Bolder',
-            size: 'Medium',
-          },
-          {
-            type: 'TextBlock',
-            text: justification || 'No justification provided',
-            wrap: true,
-            color: justification ? 'Default' : 'Attention',
-          },
-        ],
-      },
-      {
-        type: 'Container',
-        separator: true,
-        items: [
-          {
-            type: 'TextBlock',
-            text: 'Permission Level',
-            weight: 'Bolder',
-          },
-          {
-            type: 'Input.ChoiceSet',
-            id: 'permission',
-            value: 'no_permissions',
-            choices: FOLDER_PERMISSIONS,
-          },
-          {
-            type: 'TextBlock',
-            text: 'Duration',
-            weight: 'Bolder',
-          },
-          {
-            type: 'Input.ChoiceSet',
-            id: 'duration',
-            value: '24h',
-            choices: DURATION_OPTIONS,
           },
         ],
       },
     ],
-    actions: [
+    actions: [],
+  };
+  
+  // Add content based on isUid
+  if (isUid) {
+    // Valid UID - show permission/duration selectors
+    card.body.push(
+      {
+        type: 'TextBlock',
+        text: 'Permission Level',
+        weight: 'Bolder',
+        size: 'Medium',
+        spacing: 'Medium',
+      },
+      {
+        type: 'Input.ChoiceSet',
+        id: 'permission',
+        value: 'no_permissions',
+        choices: FOLDER_PERMISSIONS,
+      },
+      {
+        type: 'TextBlock',
+        text: 'Duration',
+        weight: 'Bolder',
+        size: 'Medium',
+        spacing: 'Medium',
+      },
+      {
+        type: 'Input.ChoiceSet',
+        id: 'duration',
+        value: '24h',
+        choices: DURATION_OPTIONS,
+      }
+    );
+    
+    card.actions = [
       {
         type: 'Action.Submit',
-        title: '✅ Approve',
+        title: 'Approve',
         style: 'positive',
         data: {
           action: 'approve_folder',
@@ -425,7 +455,7 @@ function buildFolderApprovalCard({
       },
       {
         type: 'Action.Submit',
-        title: '❌ Deny',
+        title: 'Deny',
         style: 'destructive',
         data: {
           action: 'deny_folder',
@@ -436,8 +466,78 @@ function buildFolderApprovalCard({
           requesterName: requesterName,
         },
       },
-    ],
-  };
+    ];
+  } else {
+    // Description - show action required with search button inline
+    card.body.push({
+      type: 'ColumnSet',
+      spacing: 'Large',
+      columns: [
+        {
+          type: 'Column',
+          width: 'stretch',
+          verticalContentAlignment: 'Center',
+          items: [
+            {
+              type: 'TextBlock',
+              text: '**Action Required:** Approver must search for the correct folder',
+              wrap: true,
+              size: 'Medium',
+            },
+          ],
+        },
+        {
+          type: 'Column',
+          width: 'auto',
+          items: [
+            {
+              type: 'ActionSet',
+              actions: [
+                {
+                  type: 'Action.Submit',
+                  title: '🔍 Search Folders',
+                  data: {
+                    action: 'search_folders',
+                    approvalId: approvalId,
+                    identifier: identifier || folderName,
+                    folderName: folderName,
+                    requesterId: requesterId,
+                    requesterEmail: requesterEmail,
+                    requesterAadObjectId: requesterAadObjectId,
+                    requesterName: requesterName,
+                    justification: justification,
+                    msteams: {
+                      type: 'task/fetch',
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    
+    // Only Deny button at bottom
+    card.actions = [
+      {
+        type: 'Action.Execute',
+        title: 'Deny Request',
+        style: 'destructive',
+        verb: 'deny_folder',
+        data: {
+          action: 'deny_folder',
+          approvalId: approvalId,
+          folderUid: null,
+          folderName: folderName,
+          requesterId: requesterId,
+          requesterName: requesterName,
+        },
+      },
+    ];
+  }
+  
+  return card;
 }
 
 /**
@@ -784,6 +884,200 @@ function buildRecordApprovalCardWithStatus({
 }
 
 /**
+ * Build a folder approval card with status (for updating existing card)
+ * Shows the same card but with APPROVED/DENIED status and no action buttons
+ */
+function buildFolderApprovalCardWithStatus({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  folderName,
+  justification,
+  status, // 'approved' or 'denied'
+  approverName,
+  permission,
+  duration,
+  expiresAt,
+  processedTime,
+}) {
+  const statusText = status === 'approved' ? 'APPROVED' : 'DENIED';
+  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  const card = {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.2',
+    body: [
+      // Header
+      {
+        type: 'TextBlock',
+        text: 'Folder Access Request',
+        weight: 'Bolder',
+        size: 'ExtraLarge',
+      },
+      // Two-column layout for details
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requesterName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Folder:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: folderName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId || 'N/A',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
+            ],
+          },
+        ],
+      },
+      // Status banner
+      {
+        type: 'Container',
+        style: status === 'approved' ? 'good' : 'attention',
+        items: [
+          {
+            type: 'TextBlock',
+            text: statusText,
+            weight: 'Bolder',
+            size: 'Large',
+            horizontalAlignment: 'Center',
+          },
+          {
+            type: 'TextBlock',
+            text: `By: ${approverName || 'Unknown'} at ${time}`,
+            size: 'Small',
+            horizontalAlignment: 'Center',
+            isSubtle: true,
+          },
+        ],
+      },
+    ],
+    // No actions - request has been processed
+    actions: [],
+  };
+  
+  // Add approval details if approved
+  if (status === 'approved') {
+    const detailsItems = [];
+    
+    // Add folder name first
+    if (folderName) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Access granted for:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: folderName, size: 'Small', color: 'Good' }] },
+        ],
+      });
+    }
+    
+    if (permission) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatFolderPermissionLabel(permission), size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (duration) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Duration:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: duration, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (requesterEmail) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Granted To:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: requesterEmail, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (expiresAt) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Expires:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: expiresAt, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    if (detailsItems.length > 0) {
+      // Insert before the status banner
+      card.body.splice(2, 0, {
+        type: 'Container',
+        spacing: 'Medium',
+        items: detailsItems,
+      });
+    }
+  }
+  
+  return card;
+}
+
+/**
  * Format permission value to human-readable label
  */
 function formatPermissionLabel(permission) {
@@ -797,6 +1091,19 @@ function formatPermissionLabel(permission) {
   return labels[permission] || permission;
 }
 
+/**
+ * Format folder permission value to human-readable label
+ */
+function formatFolderPermissionLabel(permission) {
+  const labels = {
+    'no_permissions': 'No User Permissions',
+    'manage_users': 'Manage Users',
+    'manage_records': 'Manage Records',
+    'manage_all': 'Manage Records and Users',
+  };
+  return labels[permission] || permission;
+}
+
 // Aliases for different naming conventions
 const createRecordApprovalCard = buildRecordApprovalCard;
 const createFolderApprovalCard = buildFolderApprovalCard;
@@ -806,6 +1113,7 @@ module.exports = {
   buildRecordApprovalCard,
   buildRecordApprovalCardWithStatus,
   buildFolderApprovalCard,
+  buildFolderApprovalCardWithStatus,
   buildOneTimeShareApprovalCard,
   createRecordApprovalCard,
   createFolderApprovalCard,
@@ -813,4 +1121,6 @@ module.exports = {
   RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS,
   DURATION_OPTIONS,
+  formatPermissionLabel,
+  formatFolderPermissionLabel,
 };

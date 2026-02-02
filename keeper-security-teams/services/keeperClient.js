@@ -102,7 +102,7 @@ class KeeperClient {
 
   async getRecordByUid(recordUid) {
     try {
-      const command = 'search ' + shellEscape(recordUid) + ' --format=json';
+      const command = 'search -c r ' + shellEscape(recordUid) + ' --format=json';
       const result = await this._executeCommandAsync(command, 15);
       
       if (!result || result.status !== 'success') {
@@ -147,7 +147,8 @@ class KeeperClient {
 
   async getFolderByUid(folderUid) {
     try {
-      const command = 'search ' + shellEscape(folderUid) + ' --format=json';
+      // Use -c s to filter for shared folders only (not records)
+      const command = 'search -c s ' + shellEscape(folderUid) + ' --format=json';
       const result = await this._executeCommandAsync(command, 15);
       
       if (!result || result.status !== 'success') {

@@ -21,6 +21,7 @@ module.exports = {
   
   // Approval handler
   routeApprovalAction: approvalHandler.routeApprovalAction,
+  routeApprovalActionWithCardResponse: approvalHandler.routeApprovalActionWithCardResponse,
   handleRecordApproval: approvalHandler.handleRecordApproval,
   handleRecordDenial: approvalHandler.handleRecordDenial,
   handleFolderApproval: approvalHandler.handleFolderApproval,
@@ -28,6 +29,7 @@ module.exports = {
   handleShareApproval: approvalHandler.handleShareApproval,
   handleShareDenial: approvalHandler.handleShareDenial,
   handleSearchRecordsAction: approvalHandler.handleSearchRecordsAction,
+  handleSearchFoldersAction: approvalHandler.handleSearchFoldersAction,
   parseDuration: approvalHandler.parseDuration,
   
   // PEDM handler

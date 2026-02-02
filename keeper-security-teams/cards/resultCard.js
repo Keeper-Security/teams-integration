@@ -568,9 +568,11 @@ function buildRequesterNotificationCard({
   expiresAt,
   approverName,
   denialReason,
+  itemType = 'record',
 }) {
   const statusText = approved ? 'Your Access Request Has Been Approved!' : 'Your Access Request Has Been Denied';
   const containerStyle = approved ? 'good' : 'attention';
+  const itemLabel = itemType === 'folder' ? 'Folder' : 'Record';
   
   const body = [
     // Header with status
@@ -598,7 +600,7 @@ function buildRequesterNotificationCard({
             {
               type: 'Column',
               width: 'auto',
-              items: [{ type: 'TextBlock', text: 'Record:', weight: 'Bolder' }],
+              items: [{ type: 'TextBlock', text: `${itemLabel}:`, weight: 'Bolder' }],
             },
             {
               type: 'Column',
@@ -657,7 +659,7 @@ function buildRequesterNotificationCard({
       items: [
         {
           type: 'TextBlock',
-          text: '💡 You now have access to this record in your Keeper vault.',
+          text: `💡 You now have access to this ${itemLabel.toLowerCase()} in your Keeper vault.`,
           wrap: true,
           isSubtle: true,
           size: 'Small',

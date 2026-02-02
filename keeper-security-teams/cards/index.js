@@ -12,6 +12,7 @@ module.exports = {
   buildRecordApprovalCard: approvalCard.buildRecordApprovalCard,
   buildRecordApprovalCardWithStatus: approvalCard.buildRecordApprovalCardWithStatus,
   buildFolderApprovalCard: approvalCard.buildFolderApprovalCard,
+  buildFolderApprovalCardWithStatus: approvalCard.buildFolderApprovalCardWithStatus,
   buildOneTimeShareApprovalCard: approvalCard.buildOneTimeShareApprovalCard,
   createRecordApprovalCard: approvalCard.createRecordApprovalCard,
   createFolderApprovalCard: approvalCard.createFolderApprovalCard,
