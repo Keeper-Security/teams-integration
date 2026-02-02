@@ -158,6 +158,32 @@ function buildRecordApprovalCard({
   
   // Add content based on isUid
   if (isUid) {
+    // Add Record Details section (like Slack) when UID is resolved
+    if (recordTitle && recordTitle !== identifier) {
+      card.body.push(
+        {
+          type: 'Container',
+          separator: true,
+          spacing: 'Medium',
+          items: [
+            {
+              type: 'TextBlock',
+              text: 'Record Details',
+              weight: 'Bolder',
+              size: 'Medium',
+            },
+            {
+              type: 'FactSet',
+              facts: [
+                { title: 'Title:', value: recordTitle },
+                { title: 'Type:', value: recordType || 'Record' },
+              ],
+            },
+          ],
+        }
+      );
+    }
+    
     // Valid UID - show permission/duration selectors
     card.body.push(
       {
@@ -190,9 +216,10 @@ function buildRecordApprovalCard({
     
     card.actions = [
       {
-        type: 'Action.Submit',
+        type: 'Action.Execute',
         title: 'Approve',
         style: 'positive',
+        verb: 'approve_record',
         data: {
           action: 'approve_record',
           approvalId: approvalId,
@@ -204,9 +231,10 @@ function buildRecordApprovalCard({
         },
       },
       {
-        type: 'Action.Submit',
+        type: 'Action.Execute',
         title: 'Deny',
         style: 'destructive',
+        verb: 'deny_record',
         data: {
           action: 'deny_record',
           approvalId: approvalId,
@@ -408,6 +436,32 @@ function buildFolderApprovalCard({
   
   // Add content based on isUid
   if (isUid) {
+    // Add Folder Details section (like Slack) when UID is resolved
+    if (folderName && folderName !== identifier) {
+      card.body.push(
+        {
+          type: 'Container',
+          separator: true,
+          spacing: 'Medium',
+          items: [
+            {
+              type: 'TextBlock',
+              text: 'Folder Details',
+              weight: 'Bolder',
+              size: 'Medium',
+            },
+            {
+              type: 'FactSet',
+              facts: [
+                { title: 'Title:', value: folderName },
+                { title: 'Type:', value: folderType || 'Shared Folder' },
+              ],
+            },
+          ],
+        }
+      );
+    }
+    
     // Valid UID - show permission/duration selectors
     card.body.push(
       {
@@ -440,9 +494,10 @@ function buildFolderApprovalCard({
     
     card.actions = [
       {
-        type: 'Action.Submit',
+        type: 'Action.Execute',
         title: 'Approve',
         style: 'positive',
+        verb: 'approve_folder',
         data: {
           action: 'approve_folder',
           approvalId: approvalId,
@@ -454,9 +509,10 @@ function buildFolderApprovalCard({
         },
       },
       {
-        type: 'Action.Submit',
+        type: 'Action.Execute',
         title: 'Deny',
         style: 'destructive',
+        verb: 'deny_folder',
         data: {
           action: 'deny_folder',
           approvalId: approvalId,

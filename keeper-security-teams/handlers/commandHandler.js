@@ -206,12 +206,14 @@ async function handleRequestRecord(context, argsText) {
   
   if (sentToChannel) {
     // Approval sent to dedicated channel - notify requester
+    // Show the identifier (UID) the user entered, not the resolved name (for security)
+    // Using two spaces before \n for Markdown line breaks
     await context.send(
-      '**Record access request submitted!**\n\n' +
-      `• **Request ID:** \`${approvalId}\`\n` +
-      `• **Record:** ${record?.title || uid}\n` +
-      `• **Justification:** ${justification}\n\n` +
-      'Your request has been sent to the **approvals channel** for review.\n' +
+      '**Record access request submitted!**  \n' +
+      `• **Request ID:** \`${approvalId}\`  \n` +
+      `• **Record:** \`${uid}\`  \n` +
+      `• **Justification:** ${justification}  \n` +
+      'Your request has been sent to the **approvals channel** for review.  \n' +
       'You will be notified when an administrator approves or denies your request.'
     );
   } else {
@@ -324,12 +326,14 @@ async function handleRequestFolder(context, argsText) {
   
   if (sentToChannel) {
     // Approval sent to dedicated channel - notify requester
+    // Show the identifier (UID) the user entered, not the resolved name (for security)
+    // Using two spaces before \n for Markdown line breaks
     await context.send(
-      '**Folder access request submitted!**\n\n' +
-      `• **Request ID:** \`${approvalId}\`\n` +
-      `• **Folder:** ${folder?.name || uid}\n` +
-      `• **Justification:** ${justification}\n\n` +
-      'Your request has been sent to the **approvals channel** for review.\n' +
+      '**Folder access request submitted!**  \n' +
+      `• **Request ID:** \`${approvalId}\`  \n` +
+      `• **Folder:** \`${uid}\`  \n` +
+      `• **Justification:** ${justification}  \n` +
+      'Your request has been sent to the **approvals channel** for review.  \n' +
       'You will be notified when an administrator approves or denies your request.'
     );
   } else {

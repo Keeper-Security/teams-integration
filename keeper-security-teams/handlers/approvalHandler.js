@@ -772,6 +772,212 @@ async function routeApprovalActionWithCardResponse(context, data) {
   console.log('[ApprovalHandler] routeApprovalActionWithCardResponse:', action);
   
   switch (action) {
+    case 'approve_record': {
+      const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
+      const permission = data.permission || 'view_only';
+      const duration = data.duration || '24h';
+      const durationSeconds = parseDuration(duration);
+      
+      console.log('[ApprovalHandler] Approving record via Universal Action:', { 
+        approver: approver.name, 
+        recordTitle, 
+        requesterName,
+        permission,
+        duration
+      });
+      
+      if (!recordUid) {
+        console.error('[ApprovalHandler] Missing record UID');
+        return { error: 'Missing record UID' };
+      }
+      
+      if (!requesterEmail) {
+        console.error('[ApprovalHandler] Missing requester email');
+        return { error: 'Missing requester email' };
+      }
+      
+      // Grant access
+      const result = await keeperClient.grantRecordAccess(
+        recordUid,
+        requesterEmail,
+        permission,
+        durationSeconds
+      );
+      
+      if (!result.success) {
+        console.error('[ApprovalHandler] Failed to grant access:', result.error);
+        return { error: result.error };
+      }
+      
+      // Format expiry date
+      let expiresAtFormatted = 'Permanent';
+      if (result.expiresAt) {
+        const expiryDate = new Date(result.expiresAt);
+        expiresAtFormatted = expiryDate.toLocaleString('en-US', {
+          month: '2-digit',
+          day: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+      }
+      
+      // Build updated card with APPROVED status
+      const updatedCard = cards.buildRecordApprovalCardWithStatus({
+        approvalId,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        status: 'approved',
+        approverName: approver.name,
+        permission: permission,
+        duration: duration === 'permanent' ? 'Permanent' : duration,
+        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+      });
+      
+      // Send notification to requester (async, don't block)
+      if (requesterId) {
+        try {
+          const channelService = getChannelService();
+          if (channelService) {
+            const notificationCard = cards.buildRequesterNotificationCard({
+              approved: true,
+              recordTitle: recordTitle,
+              permission: permission,
+              duration: duration === 'permanent' ? 'Permanent' : duration,
+              expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+              approverName: approver.name,
+              itemType: 'record',
+            });
+            
+            channelService.sendDirectMessage(requesterId, {
+              type: 'message',
+              attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: notificationCard,
+              }],
+            }).then(sent => {
+              if (sent) {
+                console.log(`[ApprovalHandler] Sent approval notification to requester`);
+              }
+            }).catch(err => {
+              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+            });
+          }
+        } catch (notifyError) {
+          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+        }
+      }
+      
+      return { updatedCard };
+    }
+    
+    case 'approve_folder': {
+      const { approvalId, folderUid, folderName, requesterName, requesterId, requesterEmail } = data;
+      const permission = data.permission || 'no_permissions';
+      const duration = data.duration || '24h';
+      const durationSeconds = parseDuration(duration);
+      
+      console.log('[ApprovalHandler] Approving folder via Universal Action:', { 
+        approver: approver.name, 
+        folderName, 
+        requesterName,
+        permission,
+        duration
+      });
+      
+      if (!folderUid) {
+        console.error('[ApprovalHandler] Missing folder UID');
+        return { error: 'Missing folder UID' };
+      }
+      
+      if (!requesterEmail) {
+        console.error('[ApprovalHandler] Missing requester email');
+        return { error: 'Missing requester email' };
+      }
+      
+      // Grant access
+      const result = await keeperClient.grantFolderAccess(
+        folderUid,
+        requesterEmail,
+        permission,
+        durationSeconds
+      );
+      
+      if (!result.success) {
+        console.error('[ApprovalHandler] Failed to grant folder access:', result.error);
+        return { error: result.error };
+      }
+      
+      // Format expiry date
+      let expiresAtFormatted = 'Permanent';
+      if (result.expiresAt) {
+        const expiryDate = new Date(result.expiresAt);
+        expiresAtFormatted = expiryDate.toLocaleString('en-US', {
+          month: '2-digit',
+          day: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+      }
+      
+      // Build updated card with APPROVED status
+      const updatedCard = cards.buildFolderApprovalCardWithStatus({
+        approvalId,
+        requesterName,
+        requesterEmail,
+        folderName,
+        justification: data.justification || '',
+        status: 'approved',
+        approverName: approver.name,
+        permission: permission,
+        duration: duration === 'permanent' ? 'Permanent' : duration,
+        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+      });
+      
+      // Send notification to requester (async, don't block)
+      if (requesterId) {
+        try {
+          const channelService = getChannelService();
+          if (channelService) {
+            const notificationCard = cards.buildRequesterNotificationCard({
+              approved: true,
+              recordTitle: folderName,
+              itemType: 'folder',
+              permission: permission,
+              duration: duration === 'permanent' ? 'Permanent' : duration,
+              expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+              approverName: approver.name,
+            });
+            
+            channelService.sendDirectMessage(requesterId, {
+              type: 'message',
+              attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: notificationCard,
+              }],
+            }).then(sent => {
+              if (sent) {
+                console.log(`[ApprovalHandler] Sent folder approval notification to requester`);
+              }
+            }).catch(err => {
+              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+            });
+          }
+        } catch (notifyError) {
+          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+        }
+      }
+      
+      return { updatedCard };
+    }
+    
     case 'deny_record': {
       const { approvalId, recordTitle, requesterName, requesterId } = data;
       
