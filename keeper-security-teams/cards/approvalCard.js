@@ -42,7 +42,6 @@ const DURATION_OPTIONS = [
 
 /**
  * Build an Adaptive Card for record access approval request
- * Slack-style layout with two columns
  */
 function buildRecordApprovalCard({
   approvalId,
@@ -716,7 +715,7 @@ function buildOneTimeShareApprovalCard({
     actions: [
       {
         type: 'Action.Submit',
-        title: '✅ Approve & Create Link',
+        title: 'Approve',
         style: 'positive',
         data: {
           action: 'approve_share',
@@ -730,7 +729,7 @@ function buildOneTimeShareApprovalCard({
       },
       {
         type: 'Action.Submit',
-        title: '❌ Deny',
+        title: 'Deny',
         style: 'destructive',
         data: {
           action: 'deny_share',

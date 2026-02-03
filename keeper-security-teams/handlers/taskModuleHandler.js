@@ -1,15 +1,6 @@
 /**
  * Task Module Handler
  * Handles Teams Task Modules for record search and selection
- * 
- * Similar to Slack's modal flow:
- * 1. Approver clicks "Search Records" button
- * 2. Task module opens with search results (auto-search)
- * 3. Approver selects record, permission, duration
- * 4. Approver clicks "Approve Access"
- * 
- * IMPORTANT: Use Adaptive Card version 1.2 for Task Module compatibility
- * Buttons must be in the card's main actions array (not nested in ColumnSet)
  */
 
 const keeperClient = require('../services/keeperClient');

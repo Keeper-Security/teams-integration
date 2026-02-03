@@ -1,8 +1,5 @@
 /**
  * Keeper Commander Service Mode API Client
- * 
- * This module handles all communication with Keeper Commander running in Service Mode.
- * It provides methods for searching records/folders, granting access, creating shares, etc.
  */
 
 const axios = require('axios');
@@ -36,21 +33,21 @@ class KeeperClient {
     });
   }
 
-  updateCredentials(serviceUrl, apiKey = null) {
-    this.baseUrl = serviceUrl.replace(/\/$/, '');
-    this.apiKey = apiKey;
+  // updateCredentials(serviceUrl, apiKey = null) {
+  //   this.baseUrl = serviceUrl.replace(/\/$/, '');
+  //   this.apiKey = apiKey;
     
-    this.client = axios.create({
-      baseURL: this.baseUrl,
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(apiKey && { 'api-key': apiKey }),
-      },
-    });
+  //   this.client = axios.create({
+  //     baseURL: this.baseUrl,
+  //     timeout: 30000,
+  //     headers: {
+  //       'Content-Type': 'application/json',
+  //       ...(apiKey && { 'api-key': apiKey }),
+  //     },
+  //   });
     
-    console.log('[KeeperClient] Credentials updated:', this.baseUrl);
-  }
+  //   console.log('[KeeperClient] Credentials updated:', this.baseUrl);
+  // }
 
   // ==================== Health & Connection ====================
 

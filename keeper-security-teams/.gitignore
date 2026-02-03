@@ -15,5 +15,8 @@ node_modules/
 .deployment
 .DS_Store
 
+# Persistent data (channel service)
+/data/
+
 # Dev tool directories
 /devTools/

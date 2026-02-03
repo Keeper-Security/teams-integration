@@ -1,8 +1,5 @@
 /**
- * Type definitions and constants for Keeper Teams App
- * 
- * Note: These are JSDoc types for documentation and IDE support.
- * In a TypeScript project, these would be actual interfaces.
+ * Type definitions and constants
  */
 
 /**

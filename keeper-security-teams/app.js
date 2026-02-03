@@ -216,6 +216,34 @@ app.on("message", async (context) => {
   }
 });
 
+// ==================== Conversation Update Handler ====================
+
+// Handle bot being added to a team/channel (auto-capture approvals channel)
+app.on("conversationUpdate", async (context) => {
+  const activity = context.activity;
+  
+  // Check if bot was added to the conversation
+  const botAdded = activity.membersAdded?.some(
+    member => member.id === activity.recipient?.id
+  );
+  
+  if (botAdded) {
+    console.log('[Keeper Bot] Bot added to conversation');
+    
+    // Check if this is the approvals channel - auto-capture reference
+    if (isApprovalsChannel(activity)) {
+      channelService.captureConversationReference(context, 'approvals');
+      console.log('[Keeper Bot] Auto-captured approvals channel reference on install');
+      
+      // Send welcome message to approvals channel
+      await context.send('✅ **Keeper Security Bot** is now active in this approvals channel.\n\nAccess requests will appear here for review.');
+    }
+    
+    // Capture user reference for DMs (1:1 chats)
+    channelService.captureUserReference(context);
+  }
+});
+
 // ==================== Invoke Handler ====================
 
 // Handle invoke activities (for task modules)

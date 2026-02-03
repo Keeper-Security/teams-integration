@@ -205,9 +205,6 @@ async function handleRequestRecord(context, argsText) {
   }
   
   if (sentToChannel) {
-    // Approval sent to dedicated channel - notify requester
-    // Show the identifier (UID) the user entered, not the resolved name (for security)
-    // Using two spaces before \n for Markdown line breaks
     await context.send(
       '**Record access request submitted!**  \n' +
       `• **Request ID:** \`${approvalId}\`  \n` +

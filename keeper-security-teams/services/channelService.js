@@ -8,8 +8,106 @@
  * this service routes approval requests to a dedicated Teams channel.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { MicrosoftAppCredentials, ConnectorClient } = require('botframework-connector');
 const config = require('../config');
+
+// ==================== Persistent Storage ====================
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const REFERENCES_FILE = path.join(DATA_DIR, 'conversationReferences.json');
+
+/**
+ * Ensure data directory exists
+ */
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log('[ChannelService] Created data directory');
+  }
+}
+
+/**
+ * Load conversation references from file (and expand if minimized)
+ */
+function loadReferencesFromFile() {
+  try {
+    ensureDataDir();
+    if (fs.existsSync(REFERENCES_FILE)) {
+      const data = fs.readFileSync(REFERENCES_FILE, 'utf8');
+      const refs = JSON.parse(data);
+      // Expand minimized references
+      const expanded = {};
+      for (const [key, ref] of Object.entries(refs)) {
+        expanded[key] = expandReference(ref);
+      }
+      console.log(`[ChannelService] Loaded ${Object.keys(expanded).length} conversation references from file`);
+      return expanded;
+    }
+  } catch (error) {
+    console.error('[ChannelService] Error loading references from file:', error.message);
+  }
+  return {};
+}
+
+/**
+ * Minimize a conversation reference to essential fields only
+ * @param {Object} ref - Full conversation reference
+ * @returns {Object} - Minimized reference
+ */
+function minimizeReference(ref) {
+  if (!ref) return ref;
+  return {
+    serviceUrl: ref.serviceUrl,
+    conversationId: ref.conversation?.id,
+    conversationType: ref.conversation?.conversationType,
+    tenantId: ref.conversation?.tenantId,
+    botId: ref.bot?.id
+  };
+}
+
+/**
+ * Expand a minimized reference back to full format
+ * @param {Object} min - Minimized reference
+ * @returns {Object} - Full conversation reference
+ */
+function expandReference(min) {
+  if (!min) return min;
+  // If already in full format, return as-is
+  if (min.conversation) return min;
+  return {
+    serviceUrl: min.serviceUrl,
+    channelId: 'msteams',
+    conversation: {
+      id: min.conversationId,
+      conversationType: min.conversationType,
+      tenantId: min.tenantId
+    },
+    bot: {
+      id: min.botId
+    }
+  };
+}
+
+/**
+ * Save conversation references to file (minimized)
+ */
+function saveReferencesToFile(references) {
+  try {
+    ensureDataDir();
+    // Minimize each reference before saving
+    const minimized = {};
+    for (const [key, ref] of Object.entries(references)) {
+      minimized[key] = minimizeReference(ref);
+    }
+    const data = JSON.stringify(minimized, null, 2);
+    fs.writeFileSync(REFERENCES_FILE, data, 'utf8');
+    console.log('[ChannelService] Saved conversation references to file');
+  } catch (error) {
+    console.error('[ChannelService] Error saving references to file:', error.message);
+  }
+}
 
 // Cache for connector clients by service URL
 const connectorClients = new Map();
@@ -39,10 +137,10 @@ function getConnectorClient(serviceUrl) {
 }
 
 /**
- * In-memory store for conversation references
- * In production, this should be persisted to a database
+ * Conversation references store with file persistence
+ * Loaded from file on startup, saved on updates
  */
-const conversationReferences = new Map();
+const conversationReferences = new Map(Object.entries(loadReferencesFromFile()));
 
 /**
  * In-memory store for approval card activity IDs
@@ -51,13 +149,19 @@ const conversationReferences = new Map();
 const approvalActivityMap = new Map();
 
 /**
- * Store a conversation reference
+ * Store a conversation reference (with file persistence)
  * @param {string} key - Unique key (e.g., 'approvals', channel ID)
  * @param {Object} reference - Bot Framework conversation reference
  */
 function storeConversationReference(key, reference) {
   conversationReferences.set(key, reference);
   console.log(`[ChannelService] Stored conversation reference for: ${key}`);
+  
+  // Persist to file (only for important keys like 'approvals')
+  if (key === 'approvals' || key.startsWith('user:')) {
+    const allRefs = Object.fromEntries(conversationReferences);
+    saveReferencesToFile(allRefs);
+  }
 }
 
 /**
