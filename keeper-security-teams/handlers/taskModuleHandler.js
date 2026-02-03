@@ -5,7 +5,7 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
-const { getChannelService } = require('../services');
+const { getChannelService, getApprovalActivityId } = require('../services');
 
 /**
  * Duration string to seconds mapping
@@ -232,6 +232,15 @@ async function handleTaskSubmit(context, activity) {
     return await handleSearchAction(searchQuery, approvalId, approvalContext || {}, showDuration, permission || defaultPerm, itemType);
   } else if (action === 'select_and_approve') {
     return await handleSelectAndApprove(context, selectedUid, approvalId, permission, duration, approvalContext || {}, itemType);
+  } else if (action === 'create_new_record') {
+    // Show create record modal
+    return handleCreateRecordFetch(searchQuery, approvalContext || {});
+  } else if (action === 'submit_create_record') {
+    // Handle record creation
+    return await handleCreateRecordSubmit(context, submitData, approvalContext || {});
+  } else if (action === 'cancel_create_record') {
+    // Just close the modal
+    return null;
   } else if (action === 'close') {
     // Just close the task module
     return null;
@@ -355,11 +364,32 @@ function buildSearchModal(query, approvalId, isLoading = false, approvalContext 
       wrap: true,
     });
   } else if (results.length > 0) {
-    body.push({
-      type: 'TextBlock',
-      text: `Showing ${results.length} result(s) for: **${query}**`,
-      wrap: true,
-    });
+    // Check if this is a newly created record
+    const newlyCreatedUid = approvalContext?.newlyCreatedUid;
+    const newlyCreatedTitle = approvalContext?.newlyCreatedTitle;
+    
+    if (newlyCreatedUid && results.length === 1 && results[0].uid === newlyCreatedUid) {
+      body.push({
+        type: 'TextBlock',
+        text: `✅ New record "${newlyCreatedTitle}" created successfully!`,
+        color: 'Good',
+        wrap: true,
+        weight: 'Bolder',
+      });
+      body.push({
+        type: 'TextBlock',
+        text: 'Select the record below and click "Approve Access" to grant access to the requester.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+      });
+    } else {
+      body.push({
+        type: 'TextBlock',
+        text: `Showing ${results.length} result(s) for: **${query}**`,
+        wrap: true,
+      });
+    }
     
     // Item selection with required indicator
     body.push({
@@ -705,18 +735,45 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
       });
     }
     
-    // Send the updated card to the conversation
-    try {
-      await context.send({
-        type: 'message',
-        attachments: [{
-          contentType: 'application/vnd.microsoft.card.adaptive',
-          content: updatedCard,
-        }],
-      });
-      console.log(`[TaskModule] Sent ${itemLabel} approval status card to conversation`);
-    } catch (sendError) {
-      console.error('[TaskModule] Error sending approval status:', sendError.message);
+    // Try to update the existing approval card in-place
+    const activityId = getApprovalActivityId(approvalContext.approvalId);
+    let cardUpdated = false;
+    
+    if (activityId) {
+      console.log(`[TaskModule] Attempting to update approval card in-place (approvalId: ${approvalContext.approvalId}, activityId: ${activityId})`);
+      try {
+        const channelService = getChannelService();
+        
+        if (channelService) {
+          // Use the channel service's update method (takes activityId and card)
+          const updateSuccess = await channelService.updateApprovalCard(activityId, updatedCard);
+          
+          if (updateSuccess) {
+            console.log(`[TaskModule] Successfully updated ${itemLabel} approval card in-place`);
+            cardUpdated = true;
+          }
+        }
+      } catch (updateError) {
+        console.error('[TaskModule] Error updating card in-place:', updateError.message);
+      }
+    } else {
+      console.log('[TaskModule] No activity ID found for approval, will send new card');
+    }
+    
+    // Fallback: Send new card if update failed
+    if (!cardUpdated) {
+      try {
+        await context.send({
+          type: 'message',
+          attachments: [{
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: updatedCard,
+          }],
+        });
+        console.log(`[TaskModule] Sent new ${itemLabel} approval status card (fallback)`);
+      } catch (sendError) {
+        console.error('[TaskModule] Error sending approval status:', sendError.message);
+      }
     }
     
     // Send DM notification to the requester
@@ -766,7 +823,112 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   }
 }
 
+/**
+ * Handle create record fetch - show the create record modal
+ */
+function handleCreateRecordFetch(searchQuery, approvalContext) {
+  console.log('[TaskModule] Opening create record modal for:', { searchQuery, requester: approvalContext.requesterName });
+  
+  const createRecordCard = cards.buildCreateRecordModal(approvalContext, searchQuery);
+  
+  return {
+    task: {
+      type: 'continue',
+      value: {
+        title: 'New Record Creation',
+        height: 600,
+        width: 450,
+        card: {
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: createRecordCard,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Handle create record submit - create the record and return to search with pre-selected result
+ */
+async function handleCreateRecordSubmit(context, submitData, approvalContext) {
+  const { recordTitle, recordLogin, recordPassword, recordUrl, recordNotes } = submitData;
+  
+  console.log('[TaskModule] Creating record:', { title: recordTitle, login: recordLogin });
+  
+  // Validate required fields
+  if (!recordTitle || !recordTitle.trim()) {
+    return {
+      task: {
+        type: 'message',
+        value: '❌ Title is required',
+      },
+    };
+  }
+  
+  if (!recordLogin || !recordLogin.trim()) {
+    return {
+      task: {
+        type: 'message',
+        value: '❌ Login is required',
+      },
+    };
+  }
+  
+  // Determine if we should generate password
+  const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
+  const passwordToUse = generatePassword ? '$GEN' : recordPassword;
+  
+  // Create the record
+  const result = await keeperClient.createRecord({
+    title: recordTitle.trim(),
+    login: recordLogin.trim(),
+    password: passwordToUse,
+    url: recordUrl?.trim() || null,
+    notes: recordNotes?.trim() || null,
+    generatePassword: generatePassword,
+  });
+  
+  if (!result.success) {
+    return {
+      task: {
+        type: 'message',
+        value: `❌ Failed to create record: ${result.error || 'Unknown error'}`,
+      },
+    };
+  }
+  
+  console.log('[TaskModule] Record created successfully:', result.recordUid);
+  
+  // Build the search modal with the newly created record pre-selected
+  const newRecord = {
+    uid: result.recordUid,
+    title: recordTitle.trim(),
+  };
+  
+  // Update approval context with newly created record info
+  const updatedContext = {
+    ...approvalContext,
+    newlyCreatedUid: result.recordUid,
+    newlyCreatedTitle: recordTitle.trim(),
+  };
+  
+  // Return to search modal with the new record shown and pre-selected
+  return buildSearchModal(
+    recordTitle.trim(),
+    approvalContext.approvalId,
+    false,
+    updatedContext,
+    [newRecord],  // Show only the newly created record
+    true,  // showDuration
+    'view_only',
+    result.recordUid,  // Pre-select the new record
+    'record'
+  );
+}
+
 module.exports = {
   handleTaskFetch,
   handleTaskSubmit,
+  handleCreateRecordFetch,
+  handleCreateRecordSubmit,
 };

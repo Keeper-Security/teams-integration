@@ -357,6 +357,121 @@ class KeeperClient {
     }
   }
 
+  // ==================== Record Creation ====================
+
+  /**
+   * Create a new record in Keeper vault
+   * @param {Object} params - Record parameters
+   * @param {string} params.title - Record title (required)
+   * @param {string} params.login - Login/username
+   * @param {string} params.password - Password (use '$GEN' to auto-generate)
+   * @param {string} params.url - Website URL
+   * @param {string} params.notes - Notes
+   * @param {boolean} params.generatePassword - Whether to auto-generate password
+   * @returns {Promise<Object>} - Result with success, recordUid, etc.
+   */
+  async createRecord({ title, login, password, url, notes, generatePassword = false }) {
+    try {
+      if (!title || !title.trim()) {
+        return { success: false, error: 'Title is required' };
+      }
+
+      // Build the record-add command
+      const commandParts = ['record-add'];
+      
+      // Add record type
+      commandParts.push('--record-type login');
+      
+      // Add title
+      commandParts.push('--title ' + shellEscape(title));
+      
+      // Add notes if provided
+      if (notes && notes.trim()) {
+        const notesForCli = notes.replace(/\n/g, '\\n');
+        commandParts.push('--notes ' + shellEscape(notesForCli));
+      }
+      
+      // Add login if provided
+      if (login && login.trim()) {
+        commandParts.push('login=' + shellEscape(login));
+      }
+      
+      // Add password
+      if (password && password.trim()) {
+        if (password === '$GEN') {
+          commandParts.push('password=$GEN');
+        } else {
+          commandParts.push('password=' + shellEscape(password));
+        }
+      } else if (generatePassword) {
+        commandParts.push('password=$GEN');
+      }
+      
+      // Add URL if provided
+      if (url && url.trim()) {
+        commandParts.push('url=' + shellEscape(url));
+      }
+      
+      const command = commandParts.join(' ');
+      console.log('[KeeperClient] Creating record with command:', command.replace(/password=[^\s]+/, 'password=***'));
+      
+      const result = await this._executeCommandAsync(command, 20);
+      
+      if (!result || result.status !== 'success') {
+        const errorMsg = this._formatError(result?.message);
+        return { success: false, error: 'Failed to create record: ' + errorMsg };
+      }
+      
+      console.log('[KeeperClient] Record created successfully, searching for UID...');
+      
+      // record-add doesn't return the UID, so we need to search for it
+      // Wait a moment for the record to be indexed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Search for the newly created record by exact title
+      try {
+        const searchCommand = 'search ' + shellEscape(title) + ' --format=json';
+        const searchResult = await this._executeCommandAsync(searchCommand, 10);
+        
+        if (searchResult && searchResult.status === 'success' && searchResult.data) {
+          const data = Array.isArray(searchResult.data) ? searchResult.data : [];
+          
+          if (data.length > 0) {
+            // Find the record with matching title (most recently created should be first)
+            const matchingRecord = data.find(r => r.title === title) || data[0];
+            const recordUid = matchingRecord.uid || matchingRecord.record_uid;
+            
+            if (recordUid) {
+              console.log('[KeeperClient] Found created record UID:', recordUid);
+              return {
+                success: true,
+                recordUid: recordUid,
+                title: title,
+                generatedPassword: generatePassword || password === '$GEN',
+              };
+            }
+          }
+        }
+        
+        // If search didn't find it, the record was still created
+        console.warn('[KeeperClient] Record created but UID not found via search');
+        return {
+          success: false,
+          error: 'Record created but UID could not be retrieved. The record exists in your vault but the approval flow cannot continue automatically.',
+        };
+      } catch (searchError) {
+        console.error('[KeeperClient] Error searching for created record:', searchError.message);
+        return {
+          success: false,
+          error: 'Record created but UID could not be retrieved: ' + searchError.message,
+        };
+      }
+    } catch (error) {
+      console.error('[KeeperClient] Exception in createRecord:', error);
+      return { success: false, error: 'Error creating record: ' + error.message };
+    }
+  }
+
   // ==================== PEDM Operations ====================
 
   async syncPedmData() {

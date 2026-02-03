@@ -6,6 +6,7 @@ const approvalCard = require('./approvalCard');
 const resultCard = require('./resultCard');
 const pedmCard = require('./pedmCard');
 const deviceCard = require('./deviceCard');
+const createRecordCard = require('./createRecordCard');
 
 module.exports = {
   // Approval request cards
@@ -45,6 +46,10 @@ module.exports = {
   RECORD_PERMISSIONS: approvalCard.RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS: approvalCard.FOLDER_PERMISSIONS,
   DURATION_OPTIONS: approvalCard.DURATION_OPTIONS,
+  
+  // Create record cards
+  buildCreateRecordModal: createRecordCard.buildCreateRecordModal,
+  buildCreateRecordSuccessResponse: createRecordCard.buildCreateRecordSuccessResponse,
   
   // Helpers
   formatPermission: resultCard.formatPermission,
