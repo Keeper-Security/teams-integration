@@ -10,7 +10,7 @@
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
 const config = require('../config');
-const { getChannelService, getApprovalActivityId, removeApprovalActivityId } = require('../services');
+const { getChannelService, getApprovalActivityId, removeApprovalActivityId, getApprovalStatus, storeApprovalStatus } = require('../services');
 
 /**
  * Duration string to seconds mapping
@@ -768,8 +768,57 @@ async function routeApprovalAction(context, data) {
 async function routeApprovalActionWithCardResponse(context, data) {
   const action = data.action;
   const approver = getApproverInfo(context.activity);
+  const approvalId = data.approvalId;
   
   console.log('[ApprovalHandler] routeApprovalActionWithCardResponse:', action);
+  
+  // Check if this approval has already been processed
+  if (approvalId) {
+    const existingStatus = getApprovalStatus(approvalId);
+    if (existingStatus) {
+      console.log(`[ApprovalHandler] Approval ${approvalId} already processed: ${existingStatus.status}`);
+      
+      const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
+      const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
+      const itemType = existingStatus.type === 'folder' ? 'Folder' : 'Record';
+      
+      // Return a card showing the approval was already processed
+      const alreadyProcessedCard = {
+        type: 'AdaptiveCard',
+        '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.2',
+        body: [
+          {
+            type: 'TextBlock',
+            text: `This request has already been ${statusText.toLowerCase()}`,
+            weight: 'Bolder',
+            size: 'Large',
+            wrap: true,
+            color: existingStatus.status === 'approved' ? 'Good' : 'Attention',
+          },
+          {
+            type: 'FactSet',
+            facts: [
+              { title: 'Status:', value: statusText },
+              { title: `${itemType}:`, value: itemName },
+              { title: 'Processed By:', value: existingStatus.approverName || 'Unknown' },
+              { title: 'Time:', value: existingStatus.processedTime || existingStatus.updatedAt || 'Unknown' },
+            ],
+          },
+          {
+            type: 'TextBlock',
+            text: 'No further action is needed.',
+            wrap: true,
+            isSubtle: true,
+            spacing: 'Medium',
+          },
+        ],
+        actions: [],
+      };
+      
+      return { updatedCard: alreadyProcessedCard };
+    }
+  }
   
   switch (action) {
     case 'approve_record': {
@@ -777,6 +826,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const permission = data.permission || 'view_only';
       const duration = data.duration || '24h';
       const durationSeconds = parseDuration(duration);
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
       console.log('[ApprovalHandler] Approving record via Universal Action:', { 
         approver: approver.name, 
@@ -824,6 +874,21 @@ async function routeApprovalActionWithCardResponse(context, data) {
         });
       }
       
+      // Store approval status for refresh mechanism
+      storeApprovalStatus(approvalId, {
+        status: 'approved',
+        type: 'record',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        permission,
+        duration: duration === 'permanent' ? 'Permanent' : duration,
+        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+        processedTime,
+      });
+      
       // Build updated card with APPROVED status
       const updatedCard = cards.buildRecordApprovalCardWithStatus({
         approvalId,
@@ -836,6 +901,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
         permission: permission,
         duration: duration === 'permanent' ? 'Permanent' : duration,
         expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+        processedTime,
       });
       
       // Send notification to requester (async, don't block)
@@ -880,6 +946,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const permission = data.permission || 'no_permissions';
       const duration = data.duration || '24h';
       const durationSeconds = parseDuration(duration);
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
       console.log('[ApprovalHandler] Approving folder via Universal Action:', { 
         approver: approver.name, 
@@ -927,6 +994,21 @@ async function routeApprovalActionWithCardResponse(context, data) {
         });
       }
       
+      // Store approval status for refresh mechanism
+      storeApprovalStatus(approvalId, {
+        status: 'approved',
+        type: 'folder',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        folderName,
+        justification: data.justification || '',
+        permission,
+        duration: duration === 'permanent' ? 'Permanent' : duration,
+        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+        processedTime,
+      });
+      
       // Build updated card with APPROVED status
       const updatedCard = cards.buildFolderApprovalCardWithStatus({
         approvalId,
@@ -939,6 +1021,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
         permission: permission,
         duration: duration === 'permanent' ? 'Permanent' : duration,
         expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+        processedTime,
       });
       
       // Send notification to requester (async, don't block)
@@ -979,12 +1062,25 @@ async function routeApprovalActionWithCardResponse(context, data) {
     }
     
     case 'deny_record': {
-      const { approvalId, recordTitle, requesterName, requesterId } = data;
+      const { approvalId, recordTitle, requesterName, requesterId, requesterEmail } = data;
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
       console.log('[ApprovalHandler] Denying record via Universal Action:', { 
         approver: approver.name, 
         recordTitle, 
         requesterName 
+      });
+      
+      // Store denial status for refresh mechanism
+      storeApprovalStatus(approvalId, {
+        status: 'denied',
+        type: 'record',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        processedTime,
       });
       
       // Build updated card with DENIED status
@@ -995,6 +1091,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
         justification: data.justification || '',
         status: 'denied',
         approverName: approver.name,
+        processedTime,
       });
       
       // Send notification to requester (but don't block on it)
@@ -1034,12 +1131,25 @@ async function routeApprovalActionWithCardResponse(context, data) {
     }
     
     case 'deny_folder': {
-      const { approvalId, folderName, requesterName, requesterId } = data;
+      const { approvalId, folderName, requesterName, requesterId, requesterEmail } = data;
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
       console.log('[ApprovalHandler] Denying folder via Universal Action:', { 
         approver: approver.name, 
         folderName, 
         requesterName 
+      });
+      
+      // Store denial status for refresh mechanism
+      storeApprovalStatus(approvalId, {
+        status: 'denied',
+        type: 'folder',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        folderName,
+        justification: data.justification || '',
+        processedTime,
       });
       
       // Build updated card with DENIED status
@@ -1050,6 +1160,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
         justification: data.justification || '',
         status: 'denied',
         approverName: approver.name,
+        processedTime,
       });
       
       // Send notification to requester
@@ -1094,6 +1205,293 @@ async function routeApprovalActionWithCardResponse(context, data) {
   }
 }
 
+/**
+ * Handle refresh action for approval cards
+ * This is called when Teams auto-refreshes a card (via the refresh property)
+ * Returns the appropriate card based on the current approval status
+ * 
+ * @param {Object} data - Refresh action data containing approvalId, type, and original card data
+ * @returns {Object|null} - Updated card if status has changed, null otherwise
+ */
+async function handleRefreshApprovalCard(data) {
+  const { approvalId, type } = data;
+  
+  if (!approvalId) {
+    console.log('[ApprovalHandler] Refresh: No approvalId provided');
+    return null;
+  }
+  
+  console.log(`[ApprovalHandler] Checking refresh for approval ${approvalId} (type: ${type})`);
+  
+  // Check if this approval has been processed
+  const status = getApprovalStatus(approvalId);
+  
+  if (!status) {
+    // Not processed yet - return null to keep the original card
+    console.log(`[ApprovalHandler] Approval ${approvalId} not yet processed, keeping original card`);
+    return null;
+  }
+  
+  console.log(`[ApprovalHandler] Approval ${approvalId} has status: ${status.status}`);
+  
+  // Return the appropriate status card based on type
+  if (type === 'record') {
+    return cards.buildRecordApprovalCardWithStatus({
+      approvalId: approvalId,
+      requesterName: status.requesterName || data.requesterName,
+      requesterEmail: status.requesterEmail || data.requesterEmail,
+      recordTitle: status.recordTitle || data.recordTitle,
+      justification: status.justification || data.justification,
+      status: status.status, // 'approved' or 'denied'
+      approverName: status.approverName,
+      permission: status.permission,
+      duration: status.duration,
+      expiresAt: status.expiresAt,
+      processedTime: status.processedTime,
+    });
+  } else if (type === 'folder') {
+    return cards.buildFolderApprovalCardWithStatus({
+      approvalId: approvalId,
+      requesterName: status.requesterName || data.requesterName,
+      requesterEmail: status.requesterEmail || data.requesterEmail,
+      folderName: status.folderName || data.folderName,
+      justification: status.justification || data.justification,
+      status: status.status, // 'approved' or 'denied'
+      approverName: status.approverName,
+      permission: status.permission,
+      duration: status.duration,
+      expiresAt: status.expiresAt,
+      processedTime: status.processedTime,
+    });
+  }
+  
+  console.log(`[ApprovalHandler] Unknown type ${type} for refresh`);
+  return null;
+}
+
+/**
+ * Handle inline lookup actions (search from the card itself)
+ * Called when user clicks "Look Up" button on the approval card
+ * Now supports multiple results with dropdown selection
+ * 
+ * @param {string} verb - 'lookup_record' or 'lookup_folder'
+ * @param {Object} data - Card action data
+ * @param {string} searchQuery - The search query from the input field
+ * @returns {Object} - Updated card with search results
+ */
+async function handleInlineLookup(verb, data, searchQuery) {
+  const isFolder = verb === 'lookup_folder';
+  const {
+    approvalId,
+    identifier,
+    recordTitle,
+    folderName,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    requesterName,
+    justification,
+  } = data;
+  
+  const query = searchQuery || identifier || (isFolder ? folderName : recordTitle) || '';
+  
+  console.log(`[ApprovalHandler] Inline ${isFolder ? 'folder' : 'record'} lookup:`, { query, approvalId });
+  
+  if (!query.trim()) {
+    // Return card with "no results" and allow retry
+    if (isFolder) {
+      return cards.buildFolderSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        noResults: true,
+        originalFolderName: folderName,
+      });
+    } else {
+      return cards.buildRecordSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        noResults: true,
+        originalRecordTitle: recordTitle,
+      });
+    }
+  }
+  
+  try {
+    // Search using keeperClient - fetch up to 10 results
+    const results = isFolder
+      ? await keeperClient.searchFolders(query, 10)
+      : await keeperClient.searchRecords(query, 10);
+    
+    console.log(`[ApprovalHandler] Search results for "${query}":`, results?.length || 0);
+    
+    if (!results || results.length === 0) {
+      // No results found
+      if (isFolder) {
+        return cards.buildFolderSearchResultsCard({
+          approvalId,
+          requesterName,
+          requesterId,
+          requesterEmail,
+          requesterAadObjectId,
+          justification,
+          identifier,
+          searchQuery: query,
+          noResults: true,
+          originalFolderName: folderName,
+        });
+      } else {
+        return cards.buildRecordSearchResultsCard({
+          approvalId,
+          requesterName,
+          requesterId,
+          requesterEmail,
+          requesterAadObjectId,
+          justification,
+          identifier,
+          searchQuery: query,
+          noResults: true,
+          originalRecordTitle: recordTitle,
+        });
+      }
+    }
+    
+    // Found results - pass all of them to the card builder
+    if (isFolder) {
+      const foundFolders = results.map(f => ({
+        uid: f.uid || f.folder_uid,
+        name: f.name || f.title || f.uid,
+      }));
+      
+      return cards.buildFolderSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        foundFolders,
+        originalFolderName: folderName,
+      });
+    } else {
+      const foundRecords = results.map(r => ({
+        uid: r.uid || r.record_uid,
+        title: r.title || r.name || r.uid,
+      }));
+      
+      return cards.buildRecordSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        foundRecords,
+        originalRecordTitle: recordTitle,
+      });
+    }
+  } catch (error) {
+    console.error(`[ApprovalHandler] Error searching ${isFolder ? 'folders' : 'records'}:`, error);
+    
+    // Return error card
+    if (isFolder) {
+      return cards.buildFolderSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        noResults: true,
+        originalFolderName: folderName,
+      });
+    } else {
+      return cards.buildRecordSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        noResults: true,
+        originalRecordTitle: recordTitle,
+      });
+    }
+  }
+}
+
+/**
+ * Handle reset card actions - returns the original approval card
+ * Called when user clicks "Reset" button to go back to the initial search state
+ * 
+ * @param {string} verb - 'reset_record_card' or 'reset_folder_card'
+ * @param {Object} data - Card action data
+ * @returns {Object} - Original approval card
+ */
+function handleResetCard(verb, data) {
+  const isFolder = verb === 'reset_folder_card';
+  const {
+    approvalId,
+    identifier,
+    recordTitle,
+    folderName,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    requesterName,
+    justification,
+  } = data;
+  
+  console.log(`[ApprovalHandler] Resetting ${isFolder ? 'folder' : 'record'} card:`, { approvalId });
+  
+  if (isFolder) {
+    return cards.buildFolderApprovalCard({
+      approvalId,
+      requesterName,
+      requesterId,
+      requesterEmail,
+      requesterAadObjectId,
+      folderName: folderName,
+      folderUid: null, // No UID since this is a description-based request
+      justification,
+      isUid: false,
+      identifier: identifier || folderName,
+    });
+  } else {
+    return cards.buildRecordApprovalCard({
+      approvalId,
+      requesterName,
+      requesterId,
+      requesterEmail,
+      requesterAadObjectId,
+      recordTitle: recordTitle,
+      recordUid: null, // No UID since this is a description-based request
+      justification,
+      isUid: false,
+      identifier: identifier || recordTitle,
+    });
+  }
+}
+
 module.exports = {
   routeApprovalAction,
   routeApprovalActionWithCardResponse,
@@ -1105,6 +1503,9 @@ module.exports = {
   handleShareDenial,
   handleSearchRecordsAction,
   handleSearchFoldersAction,
+  handleRefreshApprovalCard,
+  handleInlineLookup,
+  handleResetCard,
   parseDuration,
   DURATION_MAP,
 };

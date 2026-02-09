@@ -30,6 +30,9 @@ module.exports = {
   handleShareDenial: approvalHandler.handleShareDenial,
   handleSearchRecordsAction: approvalHandler.handleSearchRecordsAction,
   handleSearchFoldersAction: approvalHandler.handleSearchFoldersAction,
+  handleRefreshApprovalCard: approvalHandler.handleRefreshApprovalCard,
+  handleInlineLookup: approvalHandler.handleInlineLookup,
+  handleResetCard: approvalHandler.handleResetCard,
   parseDuration: approvalHandler.parseDuration,
   
   // PEDM handler

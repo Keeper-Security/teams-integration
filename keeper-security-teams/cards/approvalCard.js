@@ -63,6 +63,25 @@ function buildRecordApprovalCard({
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.4',
+    refresh: {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshApprovalCard',
+        data: {
+          approvalId: approvalId,
+          type: 'record',
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          recordTitle: recordTitle,
+          recordUid: recordUid,
+          justification: justification,
+          identifier: identifier,
+          isUid: isUid,
+        },
+      },
+      userIds: [], 
+    },
     body: [
       // Header
       {
@@ -245,58 +264,49 @@ function buildRecordApprovalCard({
       },
     ];
   } else {
-    // Description - show action required with search button inline
-    card.body.push({
-      type: 'ColumnSet',
-      spacing: 'Large',
-      columns: [
-        {
-          type: 'Column',
-          width: 'stretch',
-          verticalContentAlignment: 'Center',
-          items: [
-            {
-              type: 'TextBlock',
-              text: '**Action Required:** Approver must search for the correct record',
-              wrap: true,
-              size: 'Medium',
-            },
-          ],
-        },
-        {
-          type: 'Column',
-          width: 'auto',
-          items: [
-            {
-              type: 'ActionSet',
-              actions: [
-                {
-                  type: 'Action.Submit',
-                  title: '🔍 Search Records',
-                  data: {
-                    action: 'search_records',
-                    approvalId: approvalId,
-                    identifier: identifier || recordTitle,
-                    recordTitle: recordTitle,
-                    requesterId: requesterId,
-                    requesterEmail: requesterEmail,
-                    requesterAadObjectId: requesterAadObjectId,
-                    requesterName: requesterName,
-                    justification: justification,
-                    msteams: {
-                      type: 'task/fetch',
-                    },
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
+    // Description - show inline search input
+    card.body.push(
+      {
+        type: 'TextBlock',
+        text: '**Action Required:** Search for the correct record',
+        wrap: true,
+        size: 'Medium',
+        spacing: 'Large',
+      },
+      {
+        type: 'Input.Text',
+        id: 'searchQuery',
+        placeholder: 'Enter record name or UID to search...',
+        value: identifier || recordTitle || '',
+      },
+      {
+        type: 'TextBlock',
+        text: 'Enter a search term and click Look Up to find the record.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+      }
+    );
     
-    // Only Deny button at bottom
+    // Look Up and Deny buttons
     card.actions = [
+      {
+        type: 'Action.Execute',
+        title: '🔍 Search',
+        style: 'positive',
+        verb: 'lookup_record',
+        data: {
+          action: 'lookup_record',
+          approvalId: approvalId,
+          identifier: identifier || recordTitle,
+          recordTitle: recordTitle,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterAadObjectId: requesterAadObjectId,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
       {
         type: 'Action.Execute',
         title: 'Deny Request',
@@ -308,10 +318,414 @@ function buildRecordApprovalCard({
           recordUid: null,
           recordTitle: recordTitle,
           requesterId: requesterId,
+          requesterEmail: requesterEmail,
           requesterName: requesterName,
+          justification: justification,
         },
       },
     ];
+  }
+  
+  return card;
+}
+
+/**
+ * Build a record search results card (inline search flow)
+ * Shows found record with Approve/Deny/Reset buttons using Action.Execute
+ */
+function buildRecordSearchResultsCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  searchQuery,
+  // Search results - now supports array of records
+  foundRecords, // Array of { uid, title }
+  noResults = false,
+  // Original card data for reset
+  originalRecordTitle,
+}) {
+  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  const card = {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      // Header
+      {
+        type: 'TextBlock',
+        text: 'Record Access Request',
+        weight: 'Bolder',
+        size: 'ExtraLarge',
+      },
+      // Two-column layout for request details
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requesterName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId || 'N/A',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    actions: [],
+  };
+  
+  if (noResults) {
+    // No results found
+    card.body.push(
+      {
+        type: 'Container',
+        style: 'attention',
+        spacing: 'Medium',
+        items: [
+          {
+            type: 'TextBlock',
+            text: `No records found for "${searchQuery}"`,
+            wrap: true,
+            weight: 'Bolder',
+          },
+        ],
+      },
+      {
+        type: 'TextBlock',
+        text: 'Try a different search term:',
+        wrap: true,
+        spacing: 'Medium',
+      },
+      {
+        type: 'Input.Text',
+        id: 'searchQuery',
+        placeholder: 'Enter record name or UID...',
+        value: searchQuery || '',
+      }
+    );
+    
+    card.actions = [
+      {
+        type: 'Action.Execute',
+        title: '🔍 Search',
+        style: 'positive',
+        verb: 'lookup_record',
+        data: {
+          action: 'lookup_record',
+          approvalId: approvalId,
+          identifier: identifier,
+          recordTitle: originalRecordTitle,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterAadObjectId: requesterAadObjectId,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Reset',
+        verb: 'reset_record_card',
+        data: {
+          action: 'reset_record_card',
+          approvalId: approvalId,
+          identifier: identifier,
+          recordTitle: originalRecordTitle,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterAadObjectId: requesterAadObjectId,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny Request',
+        style: 'destructive',
+        verb: 'deny_record',
+        data: {
+          action: 'deny_record',
+          approvalId: approvalId,
+          recordUid: null,
+          recordTitle: originalRecordTitle,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+    ];
+  } else if (foundRecords && foundRecords.length > 0) {
+    // Records found - show dropdown selection if multiple, or single record details
+    const recordCount = foundRecords.length;
+    
+    if (recordCount === 1) {
+      // Single record found - show direct approval
+      const record = foundRecords[0];
+      card.body.push(
+        {
+          type: 'Container',
+          style: 'good',
+          spacing: 'Medium',
+          items: [
+            {
+              type: 'TextBlock',
+              text: `Record Found: ${record.title}`,
+              wrap: true,
+              weight: 'Bolder',
+            },
+            {
+              type: 'TextBlock',
+              text: `UID: ${record.uid}`,
+              size: 'Small',
+              isSubtle: true,
+            },
+          ],
+        },
+        {
+          type: 'TextBlock',
+          text: 'Permission Level',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'permission',
+          value: 'view_only',
+          choices: RECORD_PERMISSIONS,
+        },
+        {
+          type: 'TextBlock',
+          text: 'Duration',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'duration',
+          value: '1h',
+          choices: DURATION_OPTIONS,
+        }
+      );
+      
+      card.actions = [
+        {
+          type: 'Action.Execute',
+          title: 'Approve',
+          style: 'positive',
+          verb: 'approve_record',
+          data: {
+            action: 'approve_record',
+            approvalId: approvalId,
+            recordUid: record.uid,
+            recordTitle: record.title,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Reset',
+          verb: 'reset_record_card',
+          data: {
+            action: 'reset_record_card',
+            approvalId: approvalId,
+            identifier: identifier,
+            recordTitle: originalRecordTitle,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterAadObjectId: requesterAadObjectId,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Deny',
+          style: 'destructive',
+          verb: 'deny_record',
+          data: {
+            action: 'deny_record',
+            approvalId: approvalId,
+            recordUid: record.uid,
+            recordTitle: record.title,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+      ];
+    } else {
+      // Multiple records found - show dropdown selection
+      const recordChoices = foundRecords.map(r => ({
+        title: `${r.title} (${r.uid.substring(0, 8)}...)`,
+        value: JSON.stringify({ uid: r.uid, title: r.title }),
+      }));
+      
+      card.body.push(
+        {
+          type: 'Container',
+          style: 'good',
+          spacing: 'Medium',
+          items: [
+            {
+              type: 'TextBlock',
+              text: `${recordCount} Records Found`,
+              wrap: true,
+              weight: 'Bolder',
+            },
+            {
+              type: 'TextBlock',
+              text: 'Select the correct record from the list below:',
+              size: 'Small',
+              isSubtle: true,
+            },
+          ],
+        },
+        {
+          type: 'TextBlock',
+          text: 'Select Record',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'selectedRecord',
+          value: recordChoices[0].value,
+          choices: recordChoices,
+          style: 'expanded',
+        },
+        {
+          type: 'TextBlock',
+          text: 'Permission Level',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'permission',
+          value: 'view_only',
+          choices: RECORD_PERMISSIONS,
+        },
+        {
+          type: 'TextBlock',
+          text: 'Duration',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'duration',
+          value: '1h',
+          choices: DURATION_OPTIONS,
+        }
+      );
+      
+      // For multiple records, we pass the full list and let the handler pick based on selection
+      card.actions = [
+        {
+          type: 'Action.Execute',
+          title: 'Approve Selected',
+          style: 'positive',
+          verb: 'approve_selected_record',
+          data: {
+            action: 'approve_selected_record',
+            approvalId: approvalId,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: '↩️ Reset',
+          verb: 'reset_record_card',
+          data: {
+            action: 'reset_record_card',
+            approvalId: approvalId,
+            identifier: identifier,
+            recordTitle: originalRecordTitle,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterAadObjectId: requesterAadObjectId,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Deny Request',
+          style: 'destructive',
+          verb: 'deny_record',
+          data: {
+            action: 'deny_record',
+            approvalId: approvalId,
+            recordUid: null,
+            recordTitle: originalRecordTitle,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+      ];
+    }
   }
   
   return card;
@@ -341,6 +755,26 @@ function buildFolderApprovalCard({
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.4',
+    // Auto-refresh: when card is viewed, Teams will invoke this action to get updated card
+    refresh: {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshApprovalCard',
+        data: {
+          approvalId: approvalId,
+          type: 'folder',
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          folderName: folderName,
+          folderUid: folderUid,
+          justification: justification,
+          identifier: identifier,
+          isUid: isUid,
+        },
+      },
+      userIds: [], // Empty array = refresh for ALL users who view the card
+    },
     body: [
       // Header
       {
@@ -523,58 +957,49 @@ function buildFolderApprovalCard({
       },
     ];
   } else {
-    // Description - show action required with search button inline
-    card.body.push({
-      type: 'ColumnSet',
-      spacing: 'Large',
-      columns: [
-        {
-          type: 'Column',
-          width: 'stretch',
-          verticalContentAlignment: 'Center',
-          items: [
-            {
-              type: 'TextBlock',
-              text: '**Action Required:** Approver must search for the correct folder',
-              wrap: true,
-              size: 'Medium',
-            },
-          ],
-        },
-        {
-          type: 'Column',
-          width: 'auto',
-          items: [
-            {
-              type: 'ActionSet',
-              actions: [
-                {
-                  type: 'Action.Submit',
-                  title: '🔍 Search Folders',
-                  data: {
-                    action: 'search_folders',
-                    approvalId: approvalId,
-                    identifier: identifier || folderName,
-                    folderName: folderName,
-                    requesterId: requesterId,
-                    requesterEmail: requesterEmail,
-                    requesterAadObjectId: requesterAadObjectId,
-                    requesterName: requesterName,
-                    justification: justification,
-                    msteams: {
-                      type: 'task/fetch',
-                    },
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
+    // Description - show inline search input
+    card.body.push(
+      {
+        type: 'TextBlock',
+        text: '**Action Required:** Search for the correct folder',
+        wrap: true,
+        size: 'Medium',
+        spacing: 'Large',
+      },
+      {
+        type: 'Input.Text',
+        id: 'searchQuery',
+        placeholder: 'Enter folder name or UID to search...',
+        value: identifier || folderName || '',
+      },
+      {
+        type: 'TextBlock',
+        text: 'Enter a search term and click Look Up to find the folder.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+      }
+    );
     
-    // Only Deny button at bottom
+    // Look Up and Deny buttons
     card.actions = [
+      {
+        type: 'Action.Execute',
+        title: '🔍 Look Up',
+        style: 'positive',
+        verb: 'lookup_folder',
+        data: {
+          action: 'lookup_folder',
+          approvalId: approvalId,
+          identifier: identifier || folderName,
+          folderName: folderName,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterAadObjectId: requesterAadObjectId,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
       {
         type: 'Action.Execute',
         title: 'Deny Request',
@@ -586,10 +1011,415 @@ function buildFolderApprovalCard({
           folderUid: null,
           folderName: folderName,
           requesterId: requesterId,
+          requesterEmail: requesterEmail,
           requesterName: requesterName,
+          justification: justification,
         },
       },
     ];
+  }
+  
+  return card;
+}
+
+/**
+ * Build a folder search results card (inline search flow)
+ * Shows found folder(s) with Approve/Deny/Reset buttons using Action.Execute
+ * Supports multiple results with dropdown selection
+ */
+function buildFolderSearchResultsCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  searchQuery,
+  // Search results - now supports array of folders
+  foundFolders, // Array of { uid, name }
+  noResults = false,
+  // Original card data for reset
+  originalFolderName,
+}) {
+  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  const card = {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      // Header
+      {
+        type: 'TextBlock',
+        text: 'Folder Access Request',
+        weight: 'Bolder',
+        size: 'ExtraLarge',
+      },
+      // Two-column layout for request details
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requesterName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId || 'N/A',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    actions: [],
+  };
+  
+  if (noResults) {
+    // No results found
+    card.body.push(
+      {
+        type: 'Container',
+        style: 'attention',
+        spacing: 'Medium',
+        items: [
+          {
+            type: 'TextBlock',
+            text: `❌ No folders found for "${searchQuery}"`,
+            wrap: true,
+            weight: 'Bolder',
+          },
+        ],
+      },
+      {
+        type: 'TextBlock',
+        text: 'Try a different search term:',
+        wrap: true,
+        spacing: 'Medium',
+      },
+      {
+        type: 'Input.Text',
+        id: 'searchQuery',
+        placeholder: 'Enter folder name or UID...',
+        value: searchQuery || '',
+      }
+    );
+    
+    card.actions = [
+      {
+        type: 'Action.Execute',
+        title: '🔍 Look Up',
+        style: 'positive',
+        verb: 'lookup_folder',
+        data: {
+          action: 'lookup_folder',
+          approvalId: approvalId,
+          identifier: identifier,
+          folderName: originalFolderName,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterAadObjectId: requesterAadObjectId,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: '↩️ Reset',
+        verb: 'reset_folder_card',
+        data: {
+          action: 'reset_folder_card',
+          approvalId: approvalId,
+          identifier: identifier,
+          folderName: originalFolderName,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterAadObjectId: requesterAadObjectId,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny Request',
+        style: 'destructive',
+        verb: 'deny_folder',
+        data: {
+          action: 'deny_folder',
+          approvalId: approvalId,
+          folderUid: null,
+          folderName: originalFolderName,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+    ];
+  } else if (foundFolders && foundFolders.length > 0) {
+    // Folders found - show dropdown selection if multiple, or single folder details
+    const folderCount = foundFolders.length;
+    
+    if (folderCount === 1) {
+      // Single folder found - show direct approval
+      const folder = foundFolders[0];
+      card.body.push(
+        {
+          type: 'Container',
+          style: 'good',
+          spacing: 'Medium',
+          items: [
+            {
+              type: 'TextBlock',
+              text: `Folder Found: ${folder.name}`,
+              wrap: true,
+              weight: 'Bolder',
+            },
+            {
+              type: 'TextBlock',
+              text: `UID: ${folder.uid}`,
+              size: 'Small',
+              isSubtle: true,
+            },
+          ],
+        },
+        {
+          type: 'TextBlock',
+          text: 'Permission Level',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'permission',
+          value: 'no_permissions',
+          choices: FOLDER_PERMISSIONS,
+        },
+        {
+          type: 'TextBlock',
+          text: 'Duration',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'duration',
+          value: '1h',
+          choices: DURATION_OPTIONS,
+        }
+      );
+      
+      card.actions = [
+        {
+          type: 'Action.Execute',
+          title: 'Approve',
+          style: 'positive',
+          verb: 'approve_folder',
+          data: {
+            action: 'approve_folder',
+            approvalId: approvalId,
+            folderUid: folder.uid,
+            folderName: folder.name,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: '↩️ Reset',
+          verb: 'reset_folder_card',
+          data: {
+            action: 'reset_folder_card',
+            approvalId: approvalId,
+            identifier: identifier,
+            folderName: originalFolderName,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterAadObjectId: requesterAadObjectId,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Deny',
+          style: 'destructive',
+          verb: 'deny_folder',
+          data: {
+            action: 'deny_folder',
+            approvalId: approvalId,
+            folderUid: folder.uid,
+            folderName: folder.name,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+      ];
+    } else {
+      // Multiple folders found - show dropdown selection
+      const folderChoices = foundFolders.map(f => ({
+        title: `${f.name} (${f.uid.substring(0, 8)}...)`,
+        value: JSON.stringify({ uid: f.uid, name: f.name }),
+      }));
+      
+      card.body.push(
+        {
+          type: 'Container',
+          style: 'good',
+          spacing: 'Medium',
+          items: [
+            {
+              type: 'TextBlock',
+              text: `${folderCount} Folders Found`,
+              wrap: true,
+              weight: 'Bolder',
+            },
+            {
+              type: 'TextBlock',
+              text: 'Select the correct folder from the list below:',
+              size: 'Small',
+              isSubtle: true,
+            },
+          ],
+        },
+        {
+          type: 'TextBlock',
+          text: 'Select Folder',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'selectedFolder',
+          value: folderChoices[0].value,
+          choices: folderChoices,
+          style: 'expanded',
+        },
+        {
+          type: 'TextBlock',
+          text: 'Permission Level',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'permission',
+          value: 'no_permissions',
+          choices: FOLDER_PERMISSIONS,
+        },
+        {
+          type: 'TextBlock',
+          text: 'Duration',
+          weight: 'Bolder',
+          size: 'Medium',
+          spacing: 'Medium',
+        },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'duration',
+          value: '1h',
+          choices: DURATION_OPTIONS,
+        }
+      );
+      
+      // For multiple folders, we pass the full list and let the handler pick based on selection
+      card.actions = [
+        {
+          type: 'Action.Execute',
+          title: 'Approve Selected',
+          style: 'positive',
+          verb: 'approve_selected_folder',
+          data: {
+            action: 'approve_selected_folder',
+            approvalId: approvalId,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Reset',
+          verb: 'reset_folder_card',
+          data: {
+            action: 'reset_folder_card',
+            approvalId: approvalId,
+            identifier: identifier,
+            folderName: originalFolderName,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterAadObjectId: requesterAadObjectId,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Deny Request',
+          style: 'destructive',
+          verb: 'deny_folder',
+          data: {
+            action: 'deny_folder',
+            approvalId: approvalId,
+            folderUid: null,
+            folderName: originalFolderName,
+            requesterId: requesterId,
+            requesterEmail: requesterEmail,
+            requesterName: requesterName,
+            justification: justification,
+          },
+        },
+      ];
+    }
   }
   
   return card;
@@ -1159,6 +1989,343 @@ function formatFolderPermissionLabel(permission) {
   return labels[permission] || permission;
 }
 
+/**
+ * Build a record confirmation card (after search/selection in task module)
+ * Shows selected record details with Approve/Deny buttons using Action.Execute
+ * This allows the card to be updated via invoke response when admin clicks Approve
+ */
+function buildRecordConfirmationCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  recordTitle,
+  recordUid,
+  justification,
+  permission,
+  duration,
+}) {
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      // Header with "Ready to Approve" indicator
+      {
+        type: 'TextBlock',
+        text: 'Record Selected - Ready to Approve',
+        weight: 'Bolder',
+        size: 'Large',
+        color: 'Good',
+      },
+      // Two-column layout for details
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requesterName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Selected Record:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: recordTitle || recordUid,
+                color: 'Good',
+                size: 'Medium',
+                weight: 'Bolder',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId || 'N/A',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
+            ],
+          },
+        ],
+      },
+      // Access details section
+      {
+        type: 'Container',
+        separator: true,
+        spacing: 'Medium',
+        items: [
+          {
+            type: 'TextBlock',
+            text: 'Access Configuration',
+            weight: 'Bolder',
+            size: 'Medium',
+          },
+          {
+            type: 'FactSet',
+            facts: [
+              { title: 'Permission:', value: formatPermissionLabel(permission) },
+              { title: 'Duration:', value: duration === 'permanent' ? 'Permanent' : duration },
+              { title: 'For User:', value: requesterEmail },
+            ],
+          },
+        ],
+      },
+      // Instructions
+      {
+        type: 'TextBlock',
+        text: 'Click **Approve** to grant access or **Deny** to reject this request.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'Medium',
+      },
+    ],
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Approve',
+        style: 'positive',
+        verb: 'approve_record',
+        data: {
+          action: 'approve_record',
+          approvalId: approvalId,
+          recordUid: recordUid,
+          recordTitle: recordTitle,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          justification: justification,
+          permission: permission,
+          duration: duration,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny',
+        style: 'destructive',
+        verb: 'deny_record',
+        data: {
+          action: 'deny_record',
+          approvalId: approvalId,
+          recordUid: recordUid,
+          recordTitle: recordTitle,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Build a folder confirmation card (after search/selection in task module)
+ * Shows selected folder details with Approve/Deny buttons using Action.Execute
+ */
+function buildFolderConfirmationCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  folderName,
+  folderUid,
+  justification,
+  permission,
+  duration,
+}) {
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      // Header with "Ready to Approve" indicator
+      {
+        type: 'TextBlock',
+        text: 'Folder Selected - Ready to Approve',
+        weight: 'Bolder',
+        size: 'Large',
+        color: 'Good',
+      },
+      // Two-column layout for details
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Requester:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: requesterName || 'Unknown',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Selected Folder:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: folderName || folderUid,
+                color: 'Good',
+                size: 'Medium',
+                weight: 'Bolder',
+              },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              {
+                type: 'TextBlock',
+                text: 'Request ID:',
+                weight: 'Bolder',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: approvalId || 'N/A',
+                color: 'Warning',
+                size: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: 'Justification:',
+                weight: 'Bolder',
+                size: 'Medium',
+                spacing: 'Medium',
+              },
+              {
+                type: 'TextBlock',
+                text: justification || 'No justification provided',
+                wrap: true,
+                size: 'Medium',
+              },
+            ],
+          },
+        ],
+      },
+      // Access details section
+      {
+        type: 'Container',
+        separator: true,
+        spacing: 'Medium',
+        items: [
+          {
+            type: 'TextBlock',
+            text: 'Access Configuration',
+            weight: 'Bolder',
+            size: 'Medium',
+          },
+          {
+            type: 'FactSet',
+            facts: [
+              { title: 'Permission:', value: formatFolderPermissionLabel(permission) },
+              { title: 'Duration:', value: duration === 'permanent' ? 'Permanent' : duration },
+              { title: 'For User:', value: requesterEmail },
+            ],
+          },
+        ],
+      },
+      // Instructions
+      {
+        type: 'TextBlock',
+        text: 'Click **Approve** to grant access or **Deny** to reject this request.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'Medium',
+      },
+    ],
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Approve',
+        style: 'positive',
+        verb: 'approve_folder',
+        data: {
+          action: 'approve_folder',
+          approvalId: approvalId,
+          folderUid: folderUid,
+          folderName: folderName,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          justification: justification,
+          permission: permission,
+          duration: duration,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny',
+        style: 'destructive',
+        verb: 'deny_folder',
+        data: {
+          action: 'deny_folder',
+          approvalId: approvalId,
+          folderUid: folderUid,
+          folderName: folderName,
+          requesterId: requesterId,
+          requesterEmail: requesterEmail,
+          requesterName: requesterName,
+          justification: justification,
+        },
+      },
+    ],
+  };
+}
+
 // Aliases for different naming conventions
 const createRecordApprovalCard = buildRecordApprovalCard;
 const createFolderApprovalCard = buildFolderApprovalCard;
@@ -1167,8 +2334,12 @@ const createShareApprovalCard = buildOneTimeShareApprovalCard;
 module.exports = {
   buildRecordApprovalCard,
   buildRecordApprovalCardWithStatus,
+  buildRecordConfirmationCard,
+  buildRecordSearchResultsCard,
   buildFolderApprovalCard,
   buildFolderApprovalCardWithStatus,
+  buildFolderConfirmationCard,
+  buildFolderSearchResultsCard,
   buildOneTimeShareApprovalCard,
   createRecordApprovalCard,
   createFolderApprovalCard,

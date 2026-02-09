@@ -308,6 +308,184 @@ app.on("invoke", async (context) => {
     console.log('[Keeper Bot] Action verb:', verb);
     console.log('[Keeper Bot] Action data:', JSON.stringify(data));
     
+    // Handle refresh action - return the correct card based on approval status
+    if (verb === 'refreshApprovalCard') {
+      try {
+        console.log('[Keeper Bot] Processing refresh for approval:', data.approvalId);
+        const { handleRefreshApprovalCard } = require('./handlers/approvalHandler');
+        const updatedCard = await handleRefreshApprovalCard(data);
+        
+        if (updatedCard) {
+          console.log('[Keeper Bot] Returning refreshed card for approval:', data.approvalId);
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: updatedCard,
+          };
+        }
+        
+        // No status change, return empty to keep original card
+        console.log('[Keeper Bot] No status change, keeping original card');
+        return { statusCode: 200 };
+      } catch (error) {
+        console.error('[Keeper Bot] Error refreshing approval card:', error);
+        return { statusCode: 200 }; // Return 200 to avoid error display
+      }
+    }
+    
+    // Handle inline lookup actions (search from the card itself)
+    if (verb === 'lookup_record' || verb === 'lookup_folder') {
+      try {
+        const searchQuery = activity.value?.action?.data?.searchQuery || 
+                            activity.value?.data?.searchQuery ||
+                            data.searchQuery || '';
+        console.log(`[Keeper Bot] Processing ${verb} for query:`, searchQuery);
+        const { handleInlineLookup } = require('./handlers/approvalHandler');
+        const resultCard = await handleInlineLookup(verb, data, searchQuery);
+        
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: resultCard,
+        };
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling ${verb}:`, error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle reset card actions (return to original approval card)
+    if (verb === 'reset_record_card' || verb === 'reset_folder_card') {
+      try {
+        console.log(`[Keeper Bot] Processing ${verb} - resetting to original card`);
+        const { handleResetCard } = require('./handlers/approvalHandler');
+        const originalCard = handleResetCard(verb, data);
+        
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: originalCard,
+        };
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling ${verb}:`, error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle approve_selected_record (when multiple records were found)
+    if (verb === 'approve_selected_record') {
+      try {
+        // Extract selected record from input field
+        const selectedRecordJson = activity.value?.action?.data?.selectedRecord || 
+                                   activity.value?.data?.selectedRecord ||
+                                   data.selectedRecord;
+        const permission = activity.value?.action?.data?.permission || 
+                          activity.value?.data?.permission ||
+                          data.permission || 'view_only';
+        const duration = activity.value?.action?.data?.duration || 
+                        activity.value?.data?.duration ||
+                        data.duration || '1h';
+        
+        if (!selectedRecordJson) {
+          console.error('[Keeper Bot] No record selected');
+          return { statusCode: 400, body: 'No record selected' };
+        }
+        
+        let selectedRecord;
+        try {
+          selectedRecord = JSON.parse(selectedRecordJson);
+        } catch (e) {
+          console.error('[Keeper Bot] Failed to parse selected record:', e);
+          return { statusCode: 400, body: 'Invalid record selection' };
+        }
+        
+        console.log(`[Keeper Bot] Approving selected record:`, selectedRecord);
+        
+        // Build the data for approval
+        const approvalData = {
+          ...data,
+          action: 'approve_record',
+          recordUid: selectedRecord.uid,
+          recordTitle: selectedRecord.title,
+          permission,
+          duration,
+        };
+        
+        // Call the existing approval handler
+        const result = await handlers.routeApprovalActionWithCardResponse(context, approvalData);
+        
+        if (result && result.updatedCard) {
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: result.updatedCard,
+          };
+        }
+        
+        return { statusCode: 200 };
+      } catch (error) {
+        console.error('[Keeper Bot] Error handling approve_selected_record:', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle approve_selected_folder (when multiple folders were found)
+    if (verb === 'approve_selected_folder') {
+      try {
+        // Extract selected folder from input field
+        const selectedFolderJson = activity.value?.action?.data?.selectedFolder || 
+                                   activity.value?.data?.selectedFolder ||
+                                   data.selectedFolder;
+        const permission = activity.value?.action?.data?.permission || 
+                          activity.value?.data?.permission ||
+                          data.permission || 'no_permissions';
+        const duration = activity.value?.action?.data?.duration || 
+                        activity.value?.data?.duration ||
+                        data.duration || '1h';
+        
+        if (!selectedFolderJson) {
+          console.error('[Keeper Bot] No folder selected');
+          return { statusCode: 400, body: 'No folder selected' };
+        }
+        
+        let selectedFolder;
+        try {
+          selectedFolder = JSON.parse(selectedFolderJson);
+        } catch (e) {
+          console.error('[Keeper Bot] Failed to parse selected folder:', e);
+          return { statusCode: 400, body: 'Invalid folder selection' };
+        }
+        
+        console.log(`[Keeper Bot] Approving selected folder:`, selectedFolder);
+        
+        // Build the data for approval
+        const approvalData = {
+          ...data,
+          action: 'approve_folder',
+          folderUid: selectedFolder.uid,
+          folderName: selectedFolder.name,
+          permission,
+          duration,
+        };
+        
+        // Call the existing approval handler
+        const result = await handlers.routeApprovalActionWithCardResponse(context, approvalData);
+        
+        if (result && result.updatedCard) {
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: result.updatedCard,
+          };
+        }
+        
+        return { statusCode: 200 };
+      } catch (error) {
+        console.error('[Keeper Bot] Error handling approve_selected_folder:', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
       try {
         console.log(`[Keeper Bot] Processing ${action} from adaptiveCard/action (Universal Action)`);

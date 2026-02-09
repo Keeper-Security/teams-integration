@@ -79,6 +79,10 @@
                 {
                     "name": "ChannelMessage.Send.Group",
                     "type": "Application"
+                },
+                {
+                    "name": "ChannelMessage.Update.Group",
+                    "type": "Application"
                 }
             ]
         }

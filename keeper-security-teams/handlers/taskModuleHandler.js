@@ -5,7 +5,7 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
-const { getChannelService, getApprovalActivityId } = require('../services');
+const { getChannelService, getApprovalStatus } = require('../services');
 
 /**
  * Duration string to seconds mapping
@@ -148,6 +148,83 @@ async function handleTaskFetch(context, activity) {
     hasApprovalContext: !!approvalContext,
     rawRequest: JSON.stringify(requestData).substring(0, 400)
   });
+
+  // Check if this approval has already been processed
+  if (approvalId) {
+    const existingStatus = getApprovalStatus(approvalId);
+    if (existingStatus) {
+      console.log(`[TaskModule] Approval ${approvalId} already processed:`, existingStatus.status);
+      
+      const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
+      const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
+      const itemType = existingStatus.type === 'folder' ? 'Folder' : 'Record';
+      
+      // Return a message showing the approval was already processed
+      return {
+        task: {
+          type: 'continue',
+          value: {
+            title: 'Request Already Processed',
+            height: 300,
+            width: 400,
+            card: {
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: {
+                type: 'AdaptiveCard',
+                version: '1.2',
+                body: [
+                  {
+                    type: 'TextBlock',
+                    text: `✅ This request has already been ${statusText.toLowerCase()}`,
+                    weight: 'Bolder',
+                    size: 'Large',
+                    wrap: true,
+                    color: existingStatus.status === 'approved' ? 'Good' : 'Attention',
+                  },
+                  {
+                    type: 'FactSet',
+                    facts: [
+                      { title: 'Status:', value: statusText },
+                      { title: `${itemType}:`, value: itemName },
+                      { title: 'Processed By:', value: existingStatus.approverName || 'Unknown' },
+                      { title: 'Time:', value: existingStatus.processedTime || existingStatus.updatedAt || 'Unknown' },
+                    ],
+                  },
+                  existingStatus.status === 'approved' ? {
+                    type: 'FactSet',
+                    facts: [
+                      { title: 'Permission:', value: existingStatus.permission || 'N/A' },
+                      { title: 'Duration:', value: existingStatus.duration || 'N/A' },
+                      { title: 'Granted To:', value: existingStatus.requesterEmail || 'N/A' },
+                    ],
+                  } : {
+                    type: 'TextBlock',
+                    text: 'The request was denied.',
+                    wrap: true,
+                    isSubtle: true,
+                  },
+                  {
+                    type: 'TextBlock',
+                    text: 'No further action is needed.',
+                    wrap: true,
+                    isSubtle: true,
+                    spacing: 'Medium',
+                  },
+                ],
+                actions: [
+                  {
+                    type: 'Action.Submit',
+                    title: 'Close',
+                    data: { action: 'close' },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      };
+    }
+  }
 
   const searchType = type || 'search-record';
   const searchQuery = query || identifier;
@@ -486,12 +563,13 @@ function buildSearchModal(query, approvalId, isLoading = false, approvalContext 
     value: searchType,
   });
   
-  // Bottom action - only Approve Access (when results exist)
+  // Bottom action - Select & Continue (when results exist)
+  // This sends a confirmation card with Action.Execute buttons for final approval
   const actions = [];
   if (results && results.length > 0) {
     actions.push({
       type: 'Action.Submit',
-      title: 'Approve Access',
+      title: 'Select & Continue',
       style: 'positive',
       data: { action: 'select_and_approve', searchType: searchType },
     });
@@ -566,7 +644,9 @@ async function handleSearchAction(query, approvalId, approvalContext, showDurati
 }
 
 /**
- * Handle select and approve - grant access and close modal
+ * Handle select and approve - sends confirmation card with Action.Execute buttons
+ * The actual approval happens when admin clicks Approve on the confirmation card
+ * This ensures the card can be updated via Action.Execute invoke response
  * @param {string} searchType - 'record' or 'folder'
  */
 async function handleSelectAndApprove(context, selectedUid, approvalId, permission, duration, approvalContext, searchType = 'record') {
@@ -574,7 +654,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   const itemLabel = isFolder ? 'folder' : 'record';
   const itemLabelCap = isFolder ? 'Folder' : 'Record';
   
-  console.log(`[TaskModule] Approving ${itemLabel}:`, { selectedUid, approvalId, permission, duration });
+  console.log(`[TaskModule] Preparing ${itemLabel} confirmation:`, { selectedUid, approvalId, permission, duration });
 
   if (!selectedUid) {
     return {
@@ -592,7 +672,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     duration = 'permanent';
   }
 
-  // Fetch the item
+  // Fetch the item to get its title
   let item = null;
   let itemTitle = selectedUid;
   
@@ -617,9 +697,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     };
   }
 
-  const durationSeconds = DURATION_MAP[duration] ?? 86400;
-
-  // Get requester email
+  // Get requester email (needed for the confirmation card data)
   let requesterEmail = approvalContext.requesterEmail;
   
   if (!requesterEmail && approvalContext.requesterAadObjectId) {
@@ -654,173 +732,65 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     return {
       task: {
         type: 'message',
-        value: '❌ Error: Missing requester email. Cannot grant access.\n\nThe bot needs Microsoft Graph API permissions (User.Read.All) to fetch user emails.',
+        value: '❌ Error: Missing requester email. Cannot proceed.\n\nThe bot needs Microsoft Graph API permissions (User.Read.All) to fetch user emails.',
       },
     };
   }
 
-  console.log(`[TaskModule] Granting ${itemLabel} access:`, {
-    uid: selectedUid,
-    requesterEmail,
-    permission,
-    durationSeconds,
-  });
+  console.log(`[TaskModule] Sending ${itemLabel} confirmation card with Action.Execute buttons`);
 
-  // Grant access based on item type
-  let result;
+  // Build the confirmation card with Action.Execute buttons
+  // When admin clicks Approve, it will go through routeApprovalActionWithCardResponse
+  // which properly updates the card via invoke response
+  let confirmationCard;
   if (isFolder) {
-    result = await keeperClient.grantFolderAccess(
-      selectedUid,
-      requesterEmail,
-      permission,
-      durationSeconds
-    );
+    confirmationCard = cards.buildFolderConfirmationCard({
+      approvalId: approvalContext.approvalId,
+      requesterName: approvalContext.requesterName,
+      requesterId: approvalContext.requesterId,
+      requesterEmail: requesterEmail,
+      folderName: itemTitle,
+      folderUid: selectedUid,
+      justification: approvalContext.justification,
+      permission: permission,
+      duration: duration,
+    });
   } else {
-    result = await keeperClient.grantRecordAccess(
-      selectedUid,
-      requesterEmail,
-      permission,
-      durationSeconds
-    );
+    confirmationCard = cards.buildRecordConfirmationCard({
+      approvalId: approvalContext.approvalId,
+      requesterName: approvalContext.requesterName,
+      requesterId: approvalContext.requesterId,
+      requesterEmail: requesterEmail,
+      recordTitle: itemTitle,
+      recordUid: selectedUid,
+      justification: approvalContext.justification,
+      permission: permission,
+      duration: duration,
+    });
   }
 
-  if (result.success) {
-    const durationDisplay = duration === 'permanent' ? 'Permanent' : duration;
-    
-    // Format expiry date
-    let expiresAtFormatted = null;
-    if (result.expiresAt && duration !== 'permanent') {
-      const expiryDate = new Date(result.expiresAt);
-      expiresAtFormatted = expiryDate.toLocaleString('en-US', {
-        month: '2-digit',
-        day: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-      });
-    }
-    
-    // Get approver info
-    const approverName = context.activity.from?.name || 'Unknown';
-    
-    // Build the updated approval card with APPROVED status
-    let updatedCard;
-    if (isFolder) {
-      updatedCard = cards.buildFolderApprovalCardWithStatus({
-        approvalId: approvalContext.approvalId,
-        requesterName: approvalContext.requesterName,
-        requesterEmail: requesterEmail,
-        folderName: itemTitle,
-        justification: approvalContext.justification,
-        status: 'approved',
-        approverName: approverName,
-        permission: permission,
-        duration: durationDisplay,
-        expiresAt: expiresAtFormatted,
-      });
-    } else {
-      updatedCard = cards.buildRecordApprovalCardWithStatus({
-        approvalId: approvalContext.approvalId,
-        requesterName: approvalContext.requesterName,
-        requesterEmail: requesterEmail,
-        recordTitle: itemTitle,
-        justification: approvalContext.justification,
-        status: 'approved',
-        approverName: approverName,
-        permission: permission,
-        duration: durationDisplay,
-        expiresAt: expiresAtFormatted,
-      });
-    }
-    
-    // Try to update the existing approval card in-place
-    const activityId = getApprovalActivityId(approvalContext.approvalId);
-    let cardUpdated = false;
-    
-    if (activityId) {
-      console.log(`[TaskModule] Attempting to update approval card in-place (approvalId: ${approvalContext.approvalId}, activityId: ${activityId})`);
-      try {
-        const channelService = getChannelService();
-        
-        if (channelService) {
-          // Use the channel service's update method (takes activityId and card)
-          const updateSuccess = await channelService.updateApprovalCard(activityId, updatedCard);
-          
-          if (updateSuccess) {
-            console.log(`[TaskModule] Successfully updated ${itemLabel} approval card in-place`);
-            cardUpdated = true;
-          }
-        }
-      } catch (updateError) {
-        console.error('[TaskModule] Error updating card in-place:', updateError.message);
-      }
-    } else {
-      console.log('[TaskModule] No activity ID found for approval, will send new card');
-    }
-    
-    // Fallback: Send new card if update failed
-    if (!cardUpdated) {
-      try {
-        await context.send({
-          type: 'message',
-          attachments: [{
-            contentType: 'application/vnd.microsoft.card.adaptive',
-            content: updatedCard,
-          }],
-        });
-        console.log(`[TaskModule] Sent new ${itemLabel} approval status card (fallback)`);
-      } catch (sendError) {
-        console.error('[TaskModule] Error sending approval status:', sendError.message);
-      }
-    }
-    
-    // Send DM notification to the requester
-    const requesterId = approvalContext.requesterId;
-    if (requesterId) {
-      try {
-        const channelService = getChannelService();
-        if (channelService) {
-          const notificationCard = cards.buildRequesterNotificationCard({
-            approved: true,
-            recordTitle: itemTitle,
-            itemType: itemLabel,
-            permission: permission,
-            duration: durationDisplay,
-            expiresAt: expiresAtFormatted,
-            approverName: approverName,
-          });
-          
-          const notificationSent = await channelService.sendDirectMessage(requesterId, {
-            type: 'message',
-            attachments: [{
-              contentType: 'application/vnd.microsoft.card.adaptive',
-              content: notificationCard,
-            }],
-          });
-          
-          if (notificationSent) {
-            console.log(`[TaskModule] Sent approval notification to requester: ${requesterId}`);
-          } else {
-            console.log(`[TaskModule] Could not send notification to requester (no reference stored)`);
-          }
-        }
-      } catch (notifyError) {
-        console.error('[TaskModule] Error sending requester notification:', notifyError.message);
-      }
-    }
-    
-    // Close the task module
-    return null;
-  } else {
+  // Send the confirmation card to the channel
+  try {
+    await context.send({
+      type: 'message',
+      attachments: [{
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        content: confirmationCard,
+      }],
+    });
+    console.log(`[TaskModule] Sent ${itemLabel} confirmation card - awaiting admin's Approve/Deny action`);
+  } catch (sendError) {
+    console.error('[TaskModule] Error sending confirmation card:', sendError.message);
     return {
       task: {
         type: 'message',
-        value: `❌ Failed to grant ${itemLabel} access: ${result.error || 'Unknown error'}`,
+        value: `❌ Error sending confirmation card: ${sendError.message}`,
       },
     };
   }
+    
+  // Close the task module - approval will happen when admin clicks the button
+  return null;
 }
 
 /**

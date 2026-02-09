@@ -149,6 +149,44 @@ const conversationReferences = new Map(Object.entries(loadReferencesFromFile()))
 const approvalActivityMap = new Map();
 
 /**
+ * In-memory store for approval status
+ * Maps approvalId -> { status, approverName, permission, duration, expiresAt, processedTime, ... }
+ * This is used by the refresh mechanism to return the correct card state
+ */
+const approvalStatusMap = new Map();
+
+/**
+ * Store approval status for refresh mechanism
+ * @param {string} approvalId - The approval request ID
+ * @param {Object} statusData - Status data including status, approverName, etc.
+ */
+function storeApprovalStatus(approvalId, statusData) {
+  approvalStatusMap.set(approvalId, {
+    ...statusData,
+    updatedAt: new Date().toISOString(),
+  });
+  console.log(`[ChannelService] Stored approval status for ${approvalId}: ${statusData.status}`);
+}
+
+/**
+ * Get approval status
+ * @param {string} approvalId - The approval request ID
+ * @returns {Object|null} - Status data or null if not processed
+ */
+function getApprovalStatus(approvalId) {
+  return approvalStatusMap.get(approvalId) || null;
+}
+
+/**
+ * Check if an approval has been processed
+ * @param {string} approvalId - The approval request ID
+ * @returns {boolean}
+ */
+function isApprovalProcessed(approvalId) {
+  return approvalStatusMap.has(approvalId);
+}
+
+/**
  * Store a conversation reference (with file persistence)
  * @param {string} key - Unique key (e.g., 'approvals', channel ID)
  * @param {Object} reference - Bot Framework conversation reference
@@ -661,4 +699,8 @@ module.exports = {
   storeApprovalActivityId,
   getApprovalActivityId,
   removeApprovalActivityId,
+  // Approval status storage for refresh mechanism
+  storeApprovalStatus,
+  getApprovalStatus,
+  isApprovalProcessed,
 };

@@ -12,8 +12,12 @@ module.exports = {
   // Approval request cards
   buildRecordApprovalCard: approvalCard.buildRecordApprovalCard,
   buildRecordApprovalCardWithStatus: approvalCard.buildRecordApprovalCardWithStatus,
+  buildRecordConfirmationCard: approvalCard.buildRecordConfirmationCard,
+  buildRecordSearchResultsCard: approvalCard.buildRecordSearchResultsCard,
   buildFolderApprovalCard: approvalCard.buildFolderApprovalCard,
   buildFolderApprovalCardWithStatus: approvalCard.buildFolderApprovalCardWithStatus,
+  buildFolderConfirmationCard: approvalCard.buildFolderConfirmationCard,
+  buildFolderSearchResultsCard: approvalCard.buildFolderSearchResultsCard,
   buildOneTimeShareApprovalCard: approvalCard.buildOneTimeShareApprovalCard,
   createRecordApprovalCard: approvalCard.createRecordApprovalCard,
   createFolderApprovalCard: approvalCard.createFolderApprovalCard,

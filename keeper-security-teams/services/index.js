@@ -16,6 +16,9 @@ const {
   storeApprovalActivityId,
   getApprovalActivityId,
   removeApprovalActivityId,
+  storeApprovalStatus,
+  getApprovalStatus,
+  isApprovalProcessed,
 } = require('./channelService');
 
 module.exports = {
@@ -32,4 +35,7 @@ module.exports = {
   storeApprovalActivityId,
   getApprovalActivityId,
   removeApprovalActivityId,
+  storeApprovalStatus,
+  getApprovalStatus,
+  isApprovalProcessed,
 };
