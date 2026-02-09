@@ -334,7 +334,7 @@ app.on("invoke", async (context) => {
     }
     
     // Handle inline lookup actions (search from the card itself)
-    if (verb === 'lookup_record' || verb === 'lookup_folder') {
+    if (verb === 'lookup_record' || verb === 'lookup_folder' || verb === 'lookup_share') {
       try {
         const searchQuery = activity.value?.action?.data?.searchQuery || 
                             activity.value?.data?.searchQuery ||
@@ -355,7 +355,7 @@ app.on("invoke", async (context) => {
     }
     
     // Handle reset card actions (return to original approval card)
-    if (verb === 'reset_record_card' || verb === 'reset_folder_card') {
+    if (verb === 'reset_record_card' || verb === 'reset_folder_card' || verb === 'reset_share_card') {
       try {
         console.log(`[Keeper Bot] Processing ${verb} - resetting to original card`);
         const { handleResetCard } = require('./handlers/approvalHandler');
@@ -482,6 +482,63 @@ app.on("invoke", async (context) => {
         return { statusCode: 200 };
       } catch (error) {
         console.error('[Keeper Bot] Error handling approve_selected_folder:', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle approve_selected_share (when multiple records were found for one-time share)
+    if (verb === 'approve_selected_share') {
+      try {
+        // Extract selected record from input field
+        const selectedRecordJson = activity.value?.action?.data?.selectedRecord || 
+                                   activity.value?.data?.selectedRecord ||
+                                   data.selectedRecord;
+        const duration = activity.value?.action?.data?.duration || 
+                        activity.value?.data?.duration ||
+                        data.duration || '24h';
+        const editable = activity.value?.action?.data?.editable || 
+                        activity.value?.data?.editable ||
+                        data.editable || 'false';
+        
+        if (!selectedRecordJson) {
+          console.error('[Keeper Bot] No record selected for share');
+          return { statusCode: 400, body: 'No record selected' };
+        }
+        
+        let selectedRecord;
+        try {
+          selectedRecord = JSON.parse(selectedRecordJson);
+        } catch (e) {
+          console.error('[Keeper Bot] Failed to parse selected record:', e);
+          return { statusCode: 400, body: 'Invalid record selection' };
+        }
+        
+        console.log(`[Keeper Bot] Creating one-time share for selected record:`, selectedRecord);
+        
+        // Build the data for share approval
+        const approvalData = {
+          ...data,
+          action: 'approve_share',
+          recordUid: selectedRecord.uid,
+          recordTitle: selectedRecord.title,
+          duration,
+          editable,
+        };
+        
+        // Call the existing approval handler
+        const result = await handlers.routeApprovalActionWithCardResponse(context, approvalData);
+        
+        if (result && result.updatedCard) {
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: result.updatedCard,
+          };
+        }
+        
+        return { statusCode: 200 };
+      } catch (error) {
+        console.error('[Keeper Bot] Error handling approve_selected_share:', error);
         return { statusCode: 500, body: error.message };
       }
     }

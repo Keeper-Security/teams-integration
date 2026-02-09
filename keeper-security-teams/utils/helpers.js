@@ -235,7 +235,7 @@ async function sendShareLinkNotification(userId, {
   approverName,
 }) {
   const message = 
-    `🔗 **One-Time Share Link Created**\n\n` +
+    `**One-Time Share Link Created**\n\n` +
     `Your share request has been approved!\n\n` +
     `• **Request ID:** \`${approvalId}\`\n` +
     `• **Record:** ${recordTitle}\n` +

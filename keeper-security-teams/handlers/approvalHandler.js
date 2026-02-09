@@ -565,7 +565,7 @@ async function handleShareApproval(context, data) {
   }
   
   // Create the share
-  await context.send('🔗 Creating one-time share link...');
+  await context.send('Creating one-time share link...');
   
   const result = await keeperClient.createOneTimeShare(
     recordUid,
@@ -583,14 +583,14 @@ async function handleShareApproval(context, data) {
     
     await context.send({
       type: 'message',
-      text: '✅ Share link created for ' + requesterName,
+      text: 'Share link created for ' + requesterName,
       attachments: [{
         contentType: 'application/vnd.microsoft.card.adaptive',
         content: shareCard,
       }],
     });
   } else {
-    await context.send('❌ Failed to create share link: ' + result.error);
+    await context.send('Failed to create share link: ' + result.error);
   }
 }
 
@@ -617,7 +617,7 @@ async function handleShareDenial(context, data) {
     }],
   });
   
-  await context.send('❌ Share request denied for ' + requesterName + ' for record **' + recordTitle + '**');
+  await context.send('Share request denied for ' + requesterName + ' for record **' + recordTitle + '**');
 }
 
 /**
@@ -1198,6 +1198,244 @@ async function routeApprovalActionWithCardResponse(context, data) {
       return { updatedCard };
     }
     
+    case 'approve_share': {
+      const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
+      const duration = data.duration || '24h';
+      const durationSeconds = parseDuration(duration) || 86400;
+      const editable = data.editable === 'true' || data.editable === true;
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      
+      console.log('[ApprovalHandler] Approving one-time share via Universal Action:', { 
+        approver: approver.name, 
+        recordTitle, 
+        requesterName,
+        duration,
+        editable
+      });
+      
+      if (!recordUid) {
+        console.error('[ApprovalHandler] Missing record UID for share');
+        return { error: 'Missing record UID' };
+      }
+      
+      // Create the one-time share
+      const result = await keeperClient.createOneTimeShare(
+        recordUid,
+        durationSeconds,
+        editable
+      );
+      
+      if (!result.success) {
+        console.error('[ApprovalHandler] Failed to create one-time share:', result.error);
+        return { error: result.error };
+      }
+      
+      // Format expiry date
+      let expiresAtFormatted = 'N/A';
+      if (result.expiresAt) {
+        const expiryDate = new Date(result.expiresAt);
+        expiresAtFormatted = expiryDate.toLocaleString('en-US', {
+          month: '2-digit',
+          day: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+      }
+      
+      // Store approval status for refresh mechanism
+      storeApprovalStatus(approvalId, {
+        status: 'approved',
+        type: 'share',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        duration,
+        editable,
+        expiresAt: expiresAtFormatted,
+        shareUrl: result.shareUrl,
+        processedTime,
+      });
+      
+      // Build updated card with APPROVED status
+      const updatedCard = cards.buildOneTimeShareApprovalCardWithStatus({
+        approvalId,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        recordUid,
+        justification: data.justification || '',
+        status: 'approved',
+        approverName: approver.name,
+        duration,
+        expiresAt: expiresAtFormatted,
+        shareUrl: result.shareUrl,
+        editable,
+      });
+      
+      // Send share link to requester via DM
+      if (requesterId) {
+        try {
+          const channelService = getChannelService();
+          if (channelService) {
+            // Build a card with the share link
+            const shareLinkCard = {
+              type: 'AdaptiveCard',
+              '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+              version: '1.5',
+              body: [
+                {
+                  type: 'TextBlock',
+                  text: 'One-Time Share Link Created',
+                  weight: 'Bolder',
+                  size: 'Large',
+                  color: 'Good',
+                },
+                {
+                  type: 'TextBlock',
+                  text: `Your one-time share request for **${recordTitle}** has been approved!`,
+                  wrap: true,
+                },
+                {
+                  type: 'FactSet',
+                  facts: [
+                    { title: 'Record', value: recordTitle },
+                    { title: 'Duration', value: duration },
+                    { title: 'Editable', value: editable ? 'Yes' : 'No' },
+                    { title: 'Expires', value: expiresAtFormatted },
+                    { title: 'Approved by', value: approver.name },
+                  ],
+                },
+                {
+                  type: 'Container',
+                  separator: true,
+                  spacing: 'Medium',
+                  items: [
+                    {
+                      type: 'TextBlock',
+                      text: 'Share Link:',
+                      weight: 'Bolder',
+                    },
+                    {
+                      type: 'TextBlock',
+                      text: result.shareUrl,
+                      wrap: true,
+                      color: 'Accent',
+                    },
+                  ],
+                },
+                {
+                  type: 'TextBlock',
+                  text: '💡 This link can only be used once. Share it carefully.',
+                  wrap: true,
+                  isSubtle: true,
+                  spacing: 'Medium',
+                },
+              ],
+              actions: [
+                {
+                  type: 'Action.OpenUrl',
+                  title: 'Open Share Link',
+                  url: result.shareUrl,
+                },
+              ],
+            };
+            
+            channelService.sendDirectMessage(requesterId, {
+              type: 'message',
+              attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: shareLinkCard,
+              }],
+            }).then(sent => {
+              if (sent) {
+                console.log(`[ApprovalHandler] Sent share link to requester via DM`);
+              }
+            }).catch(err => {
+              console.log(`[ApprovalHandler] Could not send share link:`, err.message);
+            });
+          }
+        } catch (notifyError) {
+          console.error('[ApprovalHandler] Error sending share link:', notifyError.message);
+        }
+      }
+      
+      return { updatedCard };
+    }
+    
+    case 'deny_share': {
+      const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      
+      console.log('[ApprovalHandler] Denying one-time share via Universal Action:', { 
+        approver: approver.name, 
+        recordTitle, 
+        requesterName 
+      });
+      
+      // Store denial status for refresh mechanism
+      storeApprovalStatus(approvalId, {
+        status: 'denied',
+        type: 'share',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        processedTime,
+      });
+      
+      // Build updated card with DENIED status
+      const updatedCard = cards.buildOneTimeShareApprovalCardWithStatus({
+        approvalId,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        recordUid,
+        justification: data.justification || '',
+        status: 'denied',
+        approverName: approver.name,
+      });
+      
+      // Send notification to requester
+      if (requesterId) {
+        try {
+          const channelService = getChannelService();
+          if (channelService) {
+            const notificationCard = cards.buildRequesterNotificationCard({
+              approved: false,
+              recordTitle: recordTitle,
+              itemType: 'one-time share',
+              approverName: approver.name,
+              denialReason: data.denialReason || null,
+            });
+            
+            channelService.sendDirectMessage(requesterId, {
+              type: 'message',
+              attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: notificationCard,
+              }],
+            }).then(sent => {
+              if (sent) {
+                console.log(`[ApprovalHandler] Sent share denial notification to requester`);
+              }
+            }).catch(err => {
+              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+            });
+          }
+        } catch (notifyError) {
+          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+        }
+      }
+      
+      return { updatedCard };
+    }
+    
     default:
       // For other actions, fall back to the original handler
       await routeApprovalAction(context, data);
@@ -1274,13 +1512,14 @@ async function handleRefreshApprovalCard(data) {
  * Called when user clicks "Look Up" button on the approval card
  * Now supports multiple results with dropdown selection
  * 
- * @param {string} verb - 'lookup_record' or 'lookup_folder'
+ * @param {string} verb - 'lookup_record', 'lookup_folder', or 'lookup_share'
  * @param {Object} data - Card action data
  * @param {string} searchQuery - The search query from the input field
  * @returns {Object} - Updated card with search results
  */
 async function handleInlineLookup(verb, data, searchQuery) {
   const isFolder = verb === 'lookup_folder';
+  const isShare = verb === 'lookup_share';
   const {
     approvalId,
     identifier,
@@ -1295,7 +1534,8 @@ async function handleInlineLookup(verb, data, searchQuery) {
   
   const query = searchQuery || identifier || (isFolder ? folderName : recordTitle) || '';
   
-  console.log(`[ApprovalHandler] Inline ${isFolder ? 'folder' : 'record'} lookup:`, { query, approvalId });
+  const lookupType = isFolder ? 'folder' : (isShare ? 'share' : 'record');
+  console.log(`[ApprovalHandler] Inline ${lookupType} lookup:`, { query, approvalId });
   
   if (!query.trim()) {
     // Return card with "no results" and allow retry
@@ -1311,6 +1551,19 @@ async function handleInlineLookup(verb, data, searchQuery) {
         searchQuery: query,
         noResults: true,
         originalFolderName: folderName,
+      });
+    } else if (isShare) {
+      return cards.buildShareSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        noResults: true,
+        originalRecordTitle: recordTitle,
       });
     } else {
       return cards.buildRecordSearchResultsCard({
@@ -1330,6 +1583,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
   
   try {
     // Search using keeperClient - fetch up to 10 results
+    // For shares, we search records (one-time-share is only for records)
     const results = isFolder
       ? await keeperClient.searchFolders(query, 10)
       : await keeperClient.searchRecords(query, 10);
@@ -1350,6 +1604,19 @@ async function handleInlineLookup(verb, data, searchQuery) {
           searchQuery: query,
           noResults: true,
           originalFolderName: folderName,
+        });
+      } else if (isShare) {
+        return cards.buildShareSearchResultsCard({
+          approvalId,
+          requesterName,
+          requesterId,
+          requesterEmail,
+          requesterAadObjectId,
+          justification,
+          identifier,
+          searchQuery: query,
+          noResults: true,
+          originalRecordTitle: recordTitle,
         });
       } else {
         return cards.buildRecordSearchResultsCard({
@@ -1386,6 +1653,24 @@ async function handleInlineLookup(verb, data, searchQuery) {
         foundFolders,
         originalFolderName: folderName,
       });
+    } else if (isShare) {
+      const foundRecords = results.map(r => ({
+        uid: r.uid || r.record_uid,
+        title: r.title || r.name || r.uid,
+      }));
+      
+      return cards.buildShareSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        foundRecords,
+        originalRecordTitle: recordTitle,
+      });
     } else {
       const foundRecords = results.map(r => ({
         uid: r.uid || r.record_uid,
@@ -1406,7 +1691,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
       });
     }
   } catch (error) {
-    console.error(`[ApprovalHandler] Error searching ${isFolder ? 'folders' : 'records'}:`, error);
+    console.error(`[ApprovalHandler] Error searching ${lookupType}s:`, error);
     
     // Return error card
     if (isFolder) {
@@ -1421,6 +1706,19 @@ async function handleInlineLookup(verb, data, searchQuery) {
         searchQuery: query,
         noResults: true,
         originalFolderName: folderName,
+      });
+    } else if (isShare) {
+      return cards.buildShareSearchResultsCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        searchQuery: query,
+        noResults: true,
+        originalRecordTitle: recordTitle,
       });
     } else {
       return cards.buildRecordSearchResultsCard({
@@ -1443,12 +1741,13 @@ async function handleInlineLookup(verb, data, searchQuery) {
  * Handle reset card actions - returns the original approval card
  * Called when user clicks "Reset" button to go back to the initial search state
  * 
- * @param {string} verb - 'reset_record_card' or 'reset_folder_card'
+ * @param {string} verb - 'reset_record_card', 'reset_folder_card', or 'reset_share_card'
  * @param {Object} data - Card action data
  * @returns {Object} - Original approval card
  */
 function handleResetCard(verb, data) {
   const isFolder = verb === 'reset_folder_card';
+  const isShare = verb === 'reset_share_card';
   const {
     approvalId,
     identifier,
@@ -1461,7 +1760,8 @@ function handleResetCard(verb, data) {
     justification,
   } = data;
   
-  console.log(`[ApprovalHandler] Resetting ${isFolder ? 'folder' : 'record'} card:`, { approvalId });
+  const resetType = isFolder ? 'folder' : (isShare ? 'share' : 'record');
+  console.log(`[ApprovalHandler] Resetting ${resetType} card:`, { approvalId });
   
   if (isFolder) {
     return cards.buildFolderApprovalCard({
@@ -1475,6 +1775,19 @@ function handleResetCard(verb, data) {
       justification,
       isUid: false,
       identifier: identifier || folderName,
+    });
+  } else if (isShare) {
+    return cards.buildOneTimeShareApprovalCard({
+      approvalId,
+      requesterName,
+      requesterId,
+      requesterEmail,
+      requesterAadObjectId,
+      recordTitle: recordTitle,
+      recordUid: null, // No UID since this is a description-based request
+      justification,
+      isUid: false,
+      identifier: identifier || recordTitle,
     });
   } else {
     return cards.buildRecordApprovalCard({

@@ -83,8 +83,9 @@ const config = {
   features: {
     /**
      * Require approval for one-time shares (vs direct creation)
+     * Default: true (always require approval, matching Slack behavior)
      */
-    requireShareApproval: process.env.REQUIRE_SHARE_APPROVAL === 'true',
+    requireShareApproval: process.env.REQUIRE_SHARE_APPROVAL !== 'false', // Enabled by default
     
     /**
      * Enable search commands

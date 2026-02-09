@@ -137,33 +137,11 @@ function buildShareResultCard({
         style: 'good',
         items: [
           {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [
-                  {
-                    type: 'TextBlock',
-                    text: '🔗',
-                    size: 'ExtraLarge',
-                  },
-                ],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  {
-                    type: 'TextBlock',
-                    text: 'One-Time Share Link Created',
-                    weight: 'Bolder',
-                    size: 'Large',
-                    color: 'Good',
-                  },
-                ],
-              },
-            ],
+            type: 'TextBlock',
+            text: 'One-Time Share Link Created',
+            weight: 'Bolder',
+            size: 'Large',
+            color: 'Good',
           },
         ],
       },
@@ -200,7 +178,7 @@ function buildShareResultCard({
         items: [
           {
             type: 'TextBlock',
-            text: '⚠️ This link can only be used once and will expire after first access or at the expiration time.',
+            text: '💡 This link can only be used once and will expire after first access or at the expiration time.',
             wrap: true,
             size: 'Small',
             isSubtle: true,
@@ -211,7 +189,7 @@ function buildShareResultCard({
     actions: [
       {
         type: 'Action.OpenUrl',
-        title: '🔗 Open Share Link',
+        title: 'Open Share Link',
         url: shareUrl,
       },
     ],
@@ -344,7 +322,7 @@ function buildHelpCard() {
       {
         type: 'Container',
         items: [
-          { type: 'TextBlock', text: '📋 Request Access', weight: 'Bolder', color: 'Accent' },
+          { type: 'TextBlock', text: 'Request Access', weight: 'Bolder', color: 'Accent' },
           { type: 'TextBlock', text: '• `keeper-request-record <name> <reason>` - Request record access', wrap: true },
           { type: 'TextBlock', text: '• `keeper-request-folder <name> <reason>` - Request folder access', wrap: true },
         ],
@@ -352,7 +330,7 @@ function buildHelpCard() {
       {
         type: 'Container',
         items: [
-          { type: 'TextBlock', text: '🔗 Share', weight: 'Bolder', color: 'Accent' },
+          { type: 'TextBlock', text: 'Share', weight: 'Bolder', color: 'Accent' },
           { type: 'TextBlock', text: '• `keeper-one-time-share <name> [reason]` - Request one-time share link', wrap: true },
         ],
       },

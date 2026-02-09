@@ -362,28 +362,35 @@ async function handleShare(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
   if (!uid) {
-    await context.send('❌ **Usage:** `keeper-one-time-share <record-name> [justification]`\n\nExample: `keeper-one-time-share AWS-Prod Share with contractor`');
+    await context.send('**Usage:** `keeper-one-time-share <record-name> [justification]`\n\nExample: `keeper-one-time-share AWS-Prod Share with contractor`');
     return;
   }
   
-  let record = await keeperClient.getRecordByUid(uid);
+  if (!justification) {
+    await context.send('**Justification is required.**\n\n**Usage:** `keeper-one-time-share "<record-name>" <justification>`\n\nExample: `keeper-one-time-share "AWS-Prod" Share with contractor for audit`');
+    return;
+  }
   
-  if (!record) {
-    const searchResults = await keeperClient.searchRecords(uid, 5);
-    
-    if (searchResults.length === 0) {
-      await context.send('❌ Record not found: `' + uid + '`');
-      return;
-    }
-    
-    if (searchResults.length === 1) {
-      record = searchResults[0];
-    } else {
-      let message = '⚠️ Multiple records found. Please use the exact UID:\n\n';
-      for (const r of searchResults) {
-        message += '• `' + r.uid + '` - ' + r.title + '\n';
+  // Check if input is a valid UID (22 char base64)
+  const inputIsUid = isUid(uid);
+  let record = null;
+  let recordUid = null;
+  let recordTitle = uid;
+  
+  if (inputIsUid) {
+    // Try to fetch record details for UID
+    record = await keeperClient.getRecordByUid(uid);
+    if (record) {
+      recordUid = record.uid;
+      recordTitle = record.title;
+      
+      // Check if it's a folder (one-time-share only works for records)
+      if (record.record_type && (record.record_type.includes('folder') || record.record_type === 'shared_folder')) {
+        await context.send('**One-time share is only available for records, not folders.**\n\nPlease use `keeper-request-folder` for folder access.');
+        return;
       }
-      await context.send(message);
+    } else {
+      await context.send('Record not found with UID: `' + uid + '`\n\nPlease verify the UID and try again.');
       return;
     }
   }
@@ -393,29 +400,44 @@ async function handleShare(context, argsText) {
     const userInfo = await getUserInfo(context.activity);
     const approvalId = generateApprovalId();
     
-    const approvalCard = cards.createShareApprovalCard({
+    // Build approval card - similar to record request flow
+    // If UID: direct approval with details
+    // If description: approval with search button
+    const approvalCard = cards.buildOneTimeShareApprovalCard({
       approvalId,
-      recordUid: record?.uid || uid,
-      recordTitle: record?.title || uid,
+      recordUid: recordUid,
+      recordTitle: recordTitle,
       requesterName: userInfo.userName,
       requesterId: userInfo.teamsUserId,
       requesterEmail: userInfo.userEmail,
-      justification: justification || 'No justification provided',
+      requesterAadObjectId: context.activity.from?.aadObjectId,
+      justification: justification,
+      isUid: inputIsUid,
+      identifier: uid,
     });
     
-    // Try to send to approvals channel
+    // Try to send to approvals channel with activity ID tracking for in-place updates
     const channelService = getChannelService();
     let sentToChannel = false;
+    let activityId = null;
     
     if (channelService) {
       const status = channelService.getStatus();
       const canSend = status.approvalsChannelReady && status.appReady;
       
       if (canSend) {
-        sentToChannel = await channelService.sendApprovalCard(
+        // Use sendApprovalCardViaConnector to store activity ID for in-place updates
+        const sendResult = await channelService.sendApprovalCardViaConnector(
           approvalCard,
-          `🔗 New one-time share request from **${userInfo.userName}**`
+          approvalId,
+          `New one-time share request from **${userInfo.userName}**`
         );
+        sentToChannel = sendResult.success;
+        activityId = sendResult.activityId;
+        
+        if (activityId) {
+          console.log(`[CommandHandler] Share approval card sent with activityId: ${activityId}`);
+        }
       } else {
         console.log('[CommandHandler] Cannot send to approvals channel:', {
           approvalsReady: status.approvalsChannelReady,
@@ -425,12 +447,13 @@ async function handleShare(context, argsText) {
     }
     
     if (sentToChannel) {
+      // For description-based requests, only show the identifier (not resolved title)
       await context.send(
-        '✅ **Share request submitted!**\n\n' +
-        `• **Request ID:** \`${approvalId}\`\n` +
-        `• **Record:** ${record?.title || uid}\n` +
-        `• **Justification:** ${justification || 'No justification provided'}\n\n` +
-        'Your request has been sent to the **approvals channel** for review.\n' +
+        '**One-Time Share request submitted!**  \n' +
+        `• **Request ID:** \`${approvalId}\`  \n` +
+        `• **Record:** \`${uid}\`  \n` +
+        `• **Justification:** ${justification}  \n` +
+        'Your request has been sent to the **approvals channel** for review.  \n' +
         'Once approved, you will receive the share link via DM.'
       );
     } else {
@@ -443,7 +466,7 @@ async function handleShare(context, argsText) {
       });
       
       await context.send(
-        '✅ Share request submitted for **' + (record?.title || uid) + '**\n\n' +
+        'Share request submitted for **' + (record?.title || uid) + '**\n\n' +
         'An administrator will review your request.\n\n' +
         '_Note: Configure APPROVALS_CHANNEL_ID to route requests to a dedicated channel._'
       );
@@ -452,7 +475,7 @@ async function handleShare(context, argsText) {
   }
   
   // Create the share directly (no approval required)
-  await context.send('🔗 Creating one-time share link...');
+  await context.send('Creating one-time share link...');
   
   const result = await keeperClient.createOneTimeShare(record?.uid || uid, 86400, false);
   
@@ -471,7 +494,7 @@ async function handleShare(context, argsText) {
       }],
     });
   } else {
-    await context.send('❌ Failed to create share link: ' + result.error);
+    await context.send('Failed to create share link: ' + result.error);
   }
 }
 
