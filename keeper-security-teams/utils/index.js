@@ -2,8 +2,8 @@
  * Utils index - export all utilities
  */
 
-const helpers = require('./helpers');
+const { isUid } = require('./helpers');
 
 module.exports = {
-  ...helpers,
+  isUid,
 };

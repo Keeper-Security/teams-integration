@@ -373,12 +373,16 @@ async function handleShare(context, argsText) {
   
   // Check if input is a valid UID (22 char base64)
   const inputIsUid = isUid(uid);
+  const requiresApproval = config.features.requireShareApproval;
+  
+  // For approval flow with description, we don't need to fetch record details upfront
+  // The admin will search and select the correct record
   let record = null;
   let recordUid = null;
   let recordTitle = uid;
   
+  // Only fetch record details if it's a UID (for validation and display)
   if (inputIsUid) {
-    // Try to fetch record details for UID
     record = await keeperClient.getRecordByUid(uid);
     if (record) {
       recordUid = record.uid;
@@ -396,7 +400,7 @@ async function handleShare(context, argsText) {
   }
   
   // Check if share approval is required
-  if (config.features.requireShareApproval) {
+  if (requiresApproval) {
     const userInfo = await getUserInfo(context.activity);
     const approvalId = generateApprovalId();
     
@@ -419,7 +423,6 @@ async function handleShare(context, argsText) {
     // Try to send to approvals channel with activity ID tracking for in-place updates
     const channelService = getChannelService();
     let sentToChannel = false;
-    let activityId = null;
     
     if (channelService) {
       const status = channelService.getStatus();
@@ -433,10 +436,9 @@ async function handleShare(context, argsText) {
           `New one-time share request from **${userInfo.userName}**`
         );
         sentToChannel = sendResult.success;
-        activityId = sendResult.activityId;
         
-        if (activityId) {
-          console.log(`[CommandHandler] Share approval card sent with activityId: ${activityId}`);
+        if (sendResult.activityId) {
+          console.log(`[CommandHandler] Share approval card sent with activityId: ${sendResult.activityId}`);
         }
       } else {
         console.log('[CommandHandler] Cannot send to approvals channel:', {

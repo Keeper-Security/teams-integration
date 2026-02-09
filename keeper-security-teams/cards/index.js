@@ -23,7 +23,6 @@ module.exports = {
   buildOneTimeShareApprovalCardWithStatus: approvalCard.buildOneTimeShareApprovalCardWithStatus,
   createRecordApprovalCard: approvalCard.createRecordApprovalCard,
   createFolderApprovalCard: approvalCard.createFolderApprovalCard,
-  createShareApprovalCard: approvalCard.createShareApprovalCard,
   
   // Result/notification cards
   buildApprovalResultCard: resultCard.buildApprovalResultCard,
@@ -52,6 +51,7 @@ module.exports = {
   RECORD_PERMISSIONS: approvalCard.RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS: approvalCard.FOLDER_PERMISSIONS,
   DURATION_OPTIONS: approvalCard.DURATION_OPTIONS,
+  SHARE_DURATION_OPTIONS: approvalCard.SHARE_DURATION_OPTIONS,
   
   // Create record cards
   buildCreateRecordModal: createRecordCard.buildCreateRecordModal,
