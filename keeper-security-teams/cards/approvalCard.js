@@ -26,6 +26,8 @@ const {
   buildRecordSearchResultsCard,
   buildRecordApprovalCardWithStatus,
   buildRecordConfirmationCard,
+  buildRecordCreationCard,
+  buildRecordCreatedCard,
 } = require('./approval/recordRequestCards');
 
 // Import folder cards
@@ -53,6 +55,8 @@ module.exports = {
   buildRecordApprovalCardWithStatus,
   buildRecordConfirmationCard,
   buildRecordSearchResultsCard,
+  buildRecordCreationCard,
+  buildRecordCreatedCard,
   
   // Folder cards
   buildFolderApprovalCard,

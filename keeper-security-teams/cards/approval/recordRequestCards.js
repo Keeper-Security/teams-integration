@@ -140,6 +140,12 @@ function buildRecordApprovalCard({
       },
       {
         type: 'Action.Execute',
+        title: 'Create New Record',
+        verb: 'show_create_form',
+        data: { action: 'show_create_form', approvalId, identifier: identifier || recordTitle, recordTitle, requesterId, requesterEmail, requesterAadObjectId, requesterName, justification, searchQuery: identifier || recordTitle },
+      },
+      {
+        type: 'Action.Execute',
         title: 'Deny Request',
         style: 'destructive',
         verb: 'deny_record',
@@ -182,9 +188,28 @@ function buildRecordSearchResultsCard({
   if (noResults) {
     card.body.push(...buildNoResultsSection(searchQuery, 'record'));
     
+    // Add hint about creating new record
+    card.body.push({
+      type: 'TextBlock',
+      text: 'Or create a new record to share:',
+      wrap: true,
+      spacing: 'Medium',
+      isSubtle: true,
+    });
+    
     card.actions = [
       { type: 'Action.Execute', title: '🔍 Search', style: 'positive', verb: 'lookup_record', data: { action: 'lookup_record', ...baseData, recordTitle: originalRecordTitle } },
-      { type: 'Action.Execute', title: 'Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
+      { 
+        type: 'Action.Execute', 
+        title: 'Create New Record', 
+        verb: 'show_create_form',
+        data: { 
+          action: 'show_create_form',
+          ...baseData,
+          recordTitle: originalRecordTitle,
+          searchQuery: searchQuery || originalRecordTitle,
+        } 
+      },
       { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: null, recordTitle: originalRecordTitle, requesterId, requesterEmail, requesterName, justification } },
     ];
   } else if (foundRecords && foundRecords.length > 0) {
@@ -205,6 +230,7 @@ function buildRecordSearchResultsCard({
       
       card.actions = [
         { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
       ];
@@ -226,6 +252,7 @@ function buildRecordSearchResultsCard({
       
       card.actions = [
         { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_record', data: { action: 'approve_selected_record', approvalId, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: '↩️ Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: null, recordTitle: originalRecordTitle, requesterId, requesterEmail, requesterName, justification } },
       ];
@@ -437,9 +464,194 @@ function buildRecordConfirmationCard({
   };
 }
 
+/**
+ * Build an inline record creation form card
+ * Allows admin to create a new record directly on the approval card
+ */
+function buildRecordCreationCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  originalRecordTitle,
+  searchQuery,
+  error,
+  // Preserve form values on validation error
+  recordTitle: prevRecordTitle,
+  recordLogin: prevRecordLogin,
+  recordPassword: prevRecordPassword,
+  recordUrl: prevRecordUrl,
+  recordNotes: prevRecordNotes,
+}) {
+  const headerElements = buildSearchCardHeader('Create New Record', requesterName || 'Unknown', approvalId || 'N/A', justification || '');
+  
+  const baseData = { 
+    approvalId: approvalId || '', 
+    identifier: identifier || '', 
+    requesterId: requesterId || '', 
+    requesterEmail: requesterEmail || '', 
+    requesterAadObjectId: requesterAadObjectId || '', 
+    requesterName: requesterName || '', 
+    justification: justification || '', 
+    originalRecordTitle: originalRecordTitle || '',
+  };
+  
+  const bodyElements = [
+    ...headerElements,
+    { type: 'TextBlock', text: 'Create a new record to share with the requester:', wrap: true, spacing: 'Medium' },
+  ];
+  
+  // Show validation error if present
+  if (error) {
+    bodyElements.push({
+      type: 'TextBlock',
+      text: `${error}`,
+      wrap: true,
+      color: 'Attention',
+      weight: 'Bolder',
+      spacing: 'Medium',
+    });
+  }
+  
+  // Form fields - preserve values on validation error
+  bodyElements.push(
+    // Title (required)
+    { type: 'TextBlock', text: 'Title *', weight: 'Bolder', spacing: 'Medium' },
+    { type: 'Input.Text', id: 'recordTitle', placeholder: 'Enter record title...', value: prevRecordTitle || searchQuery || originalRecordTitle || '' },
+    
+    // Login (required)
+    { type: 'TextBlock', text: 'Login *', weight: 'Bolder', spacing: 'Small' },
+    { type: 'Input.Text', id: 'recordLogin', placeholder: 'Enter username or email...', value: prevRecordLogin || '' },
+    
+    // Password (optional - will generate if empty)
+    { type: 'TextBlock', text: 'Password (leave empty to auto-generate)', weight: 'Bolder', spacing: 'Small' },
+    { type: 'Input.Text', id: 'recordPassword', placeholder: 'Enter password or leave empty...', style: 'password', value: prevRecordPassword || '' },
+    
+    // URL (optional)
+    { type: 'TextBlock', text: 'URL (optional)', weight: 'Bolder', spacing: 'Small' },
+    { type: 'Input.Text', id: 'recordUrl', placeholder: 'https://example.com', value: prevRecordUrl || '' },
+    
+    // Notes (optional)
+    { type: 'TextBlock', text: 'Notes (optional)', weight: 'Bolder', spacing: 'Small' },
+    { type: 'Input.Text', id: 'recordNotes', placeholder: 'Add any notes...', isMultiline: true, value: prevRecordNotes || '' },
+    
+    { type: 'TextBlock', text: '* Required fields', size: 'Small', isSubtle: true, spacing: 'Small' }
+  );
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: bodyElements,
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Create Record',
+        style: 'positive',
+        verb: 'submit_create_record',
+        data: { action: 'submit_create_record', ...baseData },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Cancel',
+        verb: 'cancel_create_form',
+        data: { action: 'cancel_create_form', ...baseData, searchQuery },
+      },
+    ],
+  };
+}
+
+/**
+ * Build a card showing the newly created record with approval options
+ */
+function buildRecordCreatedCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  originalRecordTitle,
+  newRecordUid,
+  newRecordTitle,
+}) {
+  const headerElements = buildSearchCardHeader('Record Access Request', requesterName || 'Unknown', approvalId || 'N/A', justification || '');
+  
+  // Ensure all values are defined
+  const safeRecordTitle = newRecordTitle || 'New Record';
+  const safeRecordUid = newRecordUid || 'Unknown';
+  const safeRequesterId = requesterId || '';
+  const safeRequesterEmail = requesterEmail || '';
+  const safeRequesterName = requesterName || 'Unknown';
+  const safeJustification = justification || '';
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'https://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      ...headerElements,
+      {
+        type: 'Container',
+        style: 'good',
+        spacing: 'Medium',
+        items: [
+          { type: 'TextBlock', text: `Record Created: ${safeRecordTitle}`, wrap: true, weight: 'Bolder' },
+          { type: 'TextBlock', text: `UID: ${safeRecordUid}`, size: 'Small', isSubtle: true },
+        ],
+      },
+      { type: 'TextBlock', text: 'Now select permission and duration to grant access:', wrap: true, spacing: 'Medium' },
+      { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+      { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+      { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+      { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+    ],
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Approve',
+        style: 'positive',
+        verb: 'approve_record',
+        data: { 
+          action: 'approve_record', 
+          approvalId: approvalId || '', 
+          recordUid: safeRecordUid, 
+          recordTitle: safeRecordTitle, 
+          requesterId: safeRequesterId, 
+          requesterEmail: safeRequesterEmail, 
+          requesterName: safeRequesterName, 
+          justification: safeJustification,
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny',
+        style: 'destructive',
+        verb: 'deny_record',
+        data: { 
+          action: 'deny_record', 
+          approvalId: approvalId || '', 
+          recordUid: safeRecordUid, 
+          recordTitle: safeRecordTitle, 
+          requesterId: safeRequesterId, 
+          requesterEmail: safeRequesterEmail, 
+          requesterName: safeRequesterName, 
+          justification: safeJustification,
+        },
+      },
+    ],
+  };
+}
+
 module.exports = {
   buildRecordApprovalCard,
   buildRecordSearchResultsCard,
   buildRecordApprovalCardWithStatus,
   buildRecordConfirmationCard,
+  buildRecordCreationCard,
+  buildRecordCreatedCard,
 };

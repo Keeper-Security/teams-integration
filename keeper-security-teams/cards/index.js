@@ -6,14 +6,14 @@ const approvalCard = require('./approvalCard');
 const resultCard = require('./resultCard');
 const pedmCard = require('./pedmCard');
 const deviceCard = require('./deviceCard');
-const createRecordCard = require('./createRecordCard');
-
 module.exports = {
   // Approval request cards
   buildRecordApprovalCard: approvalCard.buildRecordApprovalCard,
   buildRecordApprovalCardWithStatus: approvalCard.buildRecordApprovalCardWithStatus,
   buildRecordConfirmationCard: approvalCard.buildRecordConfirmationCard,
   buildRecordSearchResultsCard: approvalCard.buildRecordSearchResultsCard,
+  buildRecordCreationCard: approvalCard.buildRecordCreationCard,
+  buildRecordCreatedCard: approvalCard.buildRecordCreatedCard,
   buildFolderApprovalCard: approvalCard.buildFolderApprovalCard,
   buildFolderApprovalCardWithStatus: approvalCard.buildFolderApprovalCardWithStatus,
   buildFolderConfirmationCard: approvalCard.buildFolderConfirmationCard,
@@ -53,12 +53,7 @@ module.exports = {
   DURATION_OPTIONS: approvalCard.DURATION_OPTIONS,
   SHARE_DURATION_OPTIONS: approvalCard.SHARE_DURATION_OPTIONS,
   
-  // Create record cards
-  buildCreateRecordModal: createRecordCard.buildCreateRecordModal,
-  buildCreateRecordSuccessResponse: createRecordCard.buildCreateRecordSuccessResponse,
-  
   // Helpers
   formatPermission: resultCard.formatPermission,
   formatDate: resultCard.formatDate,
-  getRecordIcon: resultCard.getRecordIcon,
 };

@@ -621,111 +621,6 @@ async function handleShareDenial(context, data) {
 }
 
 /**
- * Handle search_records action - Opens task module
- * In Teams, task modules are opened via invoke responses
- * @param {Object} context - Teams turn context
- * @param {Object} data - Card action data
- */
-async function handleSearchRecordsAction(context, data) {
-  const { identifier, approvalId, requesterEmail, requesterName, requesterId, requesterAadObjectId, justification } = data;
-  
-  console.log('[ApprovalHandler] Search records action:', { identifier, approvalId });
-  
-  // Store approval context for later use (when record is selected)
-  const approvalContext = {
-    approvalId,
-    requesterEmail,
-    requesterName,
-    requesterId,
-    requesterAadObjectId,
-    justification,
-    identifier,
-    searchType: 'record',
-  };
-  
-  try {
-    const { handleTaskFetch } = require('./taskModuleHandler');
-    
-    // Create a task module request
-    const taskModuleRequest = {
-      value: {
-        data: {
-          type: 'search-record',
-          query: identifier,
-          approvalId: approvalId,
-          approvalContext: approvalContext,
-        },
-      },
-    };
-    
-    // Get the task module response
-    const taskModuleResponse = await handleTaskFetch(context, taskModuleRequest);
-    
-    // Return the response - this will be sent as invoke response
-    // The SDK should handle converting this to proper invoke response format
-    return taskModuleResponse;
-    
-  } catch (error) {
-    console.error('[ApprovalHandler] Error opening task module:', error);
-    // Can't send message here as we need to return invoke response
-    // The error will be logged and task module won't open
-    throw error;
-  }
-}
-
-/**
- * Handle search_folders action - Opens task module for folder search
- * In Teams, task modules are opened via invoke responses
- * @param {Object} context - Teams turn context
- * @param {Object} data - Card action data
- */
-async function handleSearchFoldersAction(context, data) {
-  const { identifier, approvalId, requesterEmail, requesterName, requesterId, requesterAadObjectId, justification, folderName } = data;
-  
-  console.log('[ApprovalHandler] Search folders action:', { identifier, approvalId });
-  
-  // Store approval context for later use (when folder is selected)
-  const approvalContext = {
-    approvalId,
-    requesterEmail,
-    requesterName,
-    requesterId,
-    requesterAadObjectId,
-    justification,
-    identifier,
-    folderName,
-    searchType: 'folder',
-  };
-  
-  try {
-    const { handleTaskFetch } = require('./taskModuleHandler');
-    
-    // Create a task module request
-    const taskModuleRequest = {
-      value: {
-        data: {
-          type: 'search-folder',
-          action: 'search_folders',
-          query: identifier,
-          approvalId: approvalId,
-          approvalContext: approvalContext,
-        },
-      },
-    };
-    
-    // Get the task module response
-    const taskModuleResponse = await handleTaskFetch(context, taskModuleRequest);
-    
-    // Return the response - this will be sent as invoke response
-    return taskModuleResponse;
-    
-  } catch (error) {
-    console.error('[ApprovalHandler] Error opening folder search task module:', error);
-    throw error;
-  }
-}
-
-/**
  * Route card action to appropriate handler
  */
 async function routeApprovalAction(context, data) {
@@ -1805,6 +1700,238 @@ function handleResetCard(verb, data) {
   }
 }
 
+/**
+ * Handle show_create_form action - returns inline create record form card
+ * 
+ * @param {Object} data - Card action data
+ * @returns {Object} - Create record form card
+ */
+function handleShowCreateForm(data) {
+  const {
+    approvalId,
+    identifier,
+    recordTitle,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    requesterName,
+    justification,
+    searchQuery,
+  } = data;
+  
+  console.log(`[ApprovalHandler] Showing create record form:`, { approvalId });
+  
+  return cards.buildRecordCreationCard({
+    approvalId,
+    requesterName,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    justification,
+    identifier,
+    originalRecordTitle: recordTitle,
+    searchQuery: searchQuery || recordTitle,
+  });
+}
+
+/**
+ * Handle submit_create_record action - creates record and returns card with approval options
+ * 
+ * @param {Object} data - Card action data (approval context)
+ * @param {Object} formData - Form input data
+ * @returns {Object} - Created record card with approval options, or error card
+ */
+async function handleSubmitCreateRecord(data, formData) {
+  const {
+    approvalId,
+    identifier,
+    originalRecordTitle,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    requesterName,
+    justification,
+  } = data;
+  
+  const { recordTitle, recordLogin, recordPassword, recordUrl, recordNotes } = formData;
+  
+  console.log(`[ApprovalHandler] Creating record:`, { title: recordTitle, login: recordLogin, approvalId });
+  
+  // Validate required fields
+  if (!recordTitle || !recordTitle.trim()) {
+    return cards.buildRecordCreationCard({
+      approvalId,
+      requesterName,
+      requesterId,
+      requesterEmail,
+      requesterAadObjectId,
+      justification,
+      identifier,
+      originalRecordTitle,
+      searchQuery: '',
+      error: 'Title is required',
+    });
+  }
+  
+  if (!recordLogin || !recordLogin.trim()) {
+    return cards.buildRecordCreationCard({
+      approvalId,
+      requesterName,
+      requesterId,
+      requesterEmail,
+      requesterAadObjectId,
+      justification,
+      identifier,
+      originalRecordTitle,
+      searchQuery: recordTitle,
+      error: 'Login is required',
+    });
+  }
+  
+  // Determine if we should generate password
+  const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
+  const passwordToUse = generatePassword ? '$GEN' : recordPassword;
+  
+  // Create the record
+  const result = await keeperClient.createRecord({
+    title: recordTitle.trim(),
+    login: recordLogin.trim(),
+    password: passwordToUse,
+    url: recordUrl?.trim() || null,
+    notes: recordNotes?.trim() || null,
+    generatePassword: generatePassword,
+  });
+  
+  if (!result.success) {
+    console.error('[ApprovalHandler] Failed to create record:', result.error);
+    // Return error card (show form again with error message)
+    return {
+      type: 'AdaptiveCard',
+      '$schema': 'https://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [
+        { type: 'TextBlock', text: 'Record Creation Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+        { type: 'TextBlock', text: `Error: ${result.error || 'Unknown error'}`, wrap: true },
+        { type: 'TextBlock', text: 'Please try again or contact support.', wrap: true, isSubtle: true },
+      ],
+      actions: [
+        {
+          type: 'Action.Execute',
+          title: 'Try Again',
+          verb: 'show_create_form',
+          data: { action: 'show_create_form', approvalId: approvalId || '', identifier: identifier || '', recordTitle: originalRecordTitle || '', requesterId: requesterId || '', requesterEmail: requesterEmail || '', requesterAadObjectId: requesterAadObjectId || '', requesterName: requesterName || '', justification: justification || '' },
+        },
+        {
+          type: 'Action.Execute',
+          title: 'Cancel',
+          verb: 'cancel_create_form',
+          data: { action: 'cancel_create_form', approvalId: approvalId || '', identifier: identifier || '', recordTitle: originalRecordTitle || '', requesterId: requesterId || '', requesterEmail: requesterEmail || '', requesterAadObjectId: requesterAadObjectId || '', requesterName: requesterName || '', justification: justification || '' },
+        },
+      ],
+    };
+  }
+  
+  console.log('[ApprovalHandler] Record created successfully:', result.recordUid);
+  
+  // Safe values for the card
+  const safeApprovalId = approvalId || '';
+  const safeRecordUid = result.recordUid;
+  const safeRecordTitle = recordTitle.trim();
+  const safeRequesterId = requesterId || '';
+  const safeRequesterEmail = requesterEmail || '';
+  const safeRequesterName = requesterName || 'Unknown';
+  const safeJustification = justification || '';
+  
+  // Build a simple card matching the exact format of working cards
+  // Use http:// schema and minimal actions (2 only)
+  const createdRecordCard = {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
+      { type: 'TextBlock', text: `Requester: ${safeRequesterName}`, wrap: true },
+      { type: 'TextBlock', text: `Record: ${safeRecordTitle}`, wrap: true, weight: 'Bolder' },
+      { type: 'TextBlock', text: `UID: ${safeRecordUid}`, wrap: true, size: 'Small' },
+    ],
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Approve (View Only, 1h)',
+        style: 'positive',
+        verb: 'approve_record',
+        data: { 
+          action: 'approve_record', 
+          approvalId: safeApprovalId, 
+          recordUid: safeRecordUid, 
+          recordTitle: safeRecordTitle, 
+          requesterId: safeRequesterId, 
+          requesterEmail: safeRequesterEmail, 
+          requesterName: safeRequesterName, 
+          justification: safeJustification,
+          permission: 'view_only',
+          duration: '1h',
+        },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny',
+        style: 'destructive',
+        verb: 'deny_record',
+        data: { 
+          action: 'deny_record', 
+          approvalId: safeApprovalId, 
+          recordUid: safeRecordUid, 
+          recordTitle: safeRecordTitle, 
+          requesterId: safeRequesterId, 
+          requesterEmail: safeRequesterEmail, 
+          requesterName: safeRequesterName, 
+          justification: safeJustification,
+        },
+      },
+    ],
+  };
+  
+  console.log('[ApprovalHandler] Returning created record card');
+  return createdRecordCard;
+}
+
+/**
+ * Handle cancel_create_form action - returns to search results card (with no results)
+ * 
+ * @param {Object} data - Card action data
+ * @returns {Object} - Search results card with no results
+ */
+async function handleCancelCreateForm(data) {
+  const {
+    approvalId,
+    identifier,
+    recordTitle,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    requesterName,
+    justification,
+    searchQuery,
+  } = data;
+  
+  console.log(`[ApprovalHandler] Cancelling create form, returning to search:`, { approvalId });
+  
+  // Return to search results card with no results (same as when search found nothing)
+  return cards.buildRecordSearchResultsCard({
+    approvalId,
+    requesterName,
+    requesterId,
+    requesterEmail,
+    requesterAadObjectId,
+    justification,
+    identifier,
+    searchQuery: searchQuery || recordTitle,
+    noResults: true,
+    originalRecordTitle: recordTitle,
+  });
+}
+
 module.exports = {
   routeApprovalAction,
   routeApprovalActionWithCardResponse,
@@ -1814,11 +1941,12 @@ module.exports = {
   handleFolderDenial,
   handleShareApproval,
   handleShareDenial,
-  handleSearchRecordsAction,
-  handleSearchFoldersAction,
   handleRefreshApprovalCard,
   handleInlineLookup,
   handleResetCard,
+  handleShowCreateForm,
+  handleSubmitCreateRecord,
+  handleCancelCreateForm,
   parseDuration,
   DURATION_MAP,
 };

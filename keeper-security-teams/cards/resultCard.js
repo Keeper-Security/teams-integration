@@ -229,21 +229,10 @@ function buildSearchResultsCard({
       };
     } else {
       return {
-        type: 'ColumnSet',
-        columns: [
-          {
-            type: 'Column',
-            width: 'auto',
-            items: [{ type: 'TextBlock', text: getRecordIcon(item.recordType) }],
-          },
-          {
-            type: 'Column',
-            width: 'stretch',
-            items: [
-              { type: 'TextBlock', text: item.title, weight: 'Bolder' },
-              { type: 'TextBlock', text: 'UID: ' + item.uid + ' | Type: ' + item.recordType, size: 'Small', isSubtle: true },
-            ],
-          },
+        type: 'Container',
+        items: [
+          { type: 'TextBlock', text: item.title, weight: 'Bolder' },
+          { type: 'TextBlock', text: 'UID: ' + item.uid + ' | Type: ' + item.recordType, size: 'Small', isSubtle: true },
         ],
       };
     }
@@ -520,20 +509,6 @@ function formatDate(dateStr) {
   }
 }
 
-function getRecordIcon(recordType) {
-  const icons = {
-    'login': '🔑',
-    'bankAccount': '🏦',
-    'bankCard': '💳',
-    'sshKeys': '🔐',
-    'encryptedNotes': '📝',
-    'file': '📄',
-    'serverCredentials': '🖥️',
-    'databaseCredentials': '🗄️',
-  };
-  return icons[recordType] || '🔐';
-}
-
 /**
  * Build a notification card for the requester after approval/denial
  * This is sent as a DM to the person who originally requested access
@@ -710,5 +685,4 @@ module.exports = {
   createHelpCard,
   formatPermission,
   formatDate,
-  getRecordIcon,
 };

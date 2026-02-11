@@ -100,46 +100,6 @@ async function handleTaskFetch(context, activity) {
   let identifier = requestData.identifier;
   let approvalContext = requestData.approvalContext;
   
-  // If action is 'search_records', extract the data from the card action
-  if (requestData.action === 'search_records') {
-    type = 'search-record';
-    query = requestData.identifier;
-    approvalId = requestData.approvalId;
-    identifier = requestData.identifier;
-    
-    approvalContext = {
-      approvalId: requestData.approvalId,
-      requesterEmail: requestData.requesterEmail,
-      requesterName: requestData.requesterName,
-      requesterId: requestData.requesterId,
-      requesterAadObjectId: requestData.requesterAadObjectId,
-      justification: requestData.justification,
-      identifier: requestData.identifier,
-      recordTitle: requestData.recordTitle,
-      searchType: 'record',
-    };
-  }
-  
-  // If action is 'search_folders', extract the data from the card action
-  if (requestData.action === 'search_folders') {
-    type = 'search-folder';
-    query = requestData.identifier;
-    approvalId = requestData.approvalId;
-    identifier = requestData.identifier;
-    
-    approvalContext = {
-      approvalId: requestData.approvalId,
-      requesterEmail: requestData.requesterEmail,
-      requesterName: requestData.requesterName,
-      requesterId: requestData.requesterId,
-      requesterAadObjectId: requestData.requesterAadObjectId,
-      justification: requestData.justification,
-      identifier: requestData.identifier,
-      folderName: requestData.folderName,
-      searchType: 'folder',
-    };
-  }
-  
   console.log('[TaskModule] Fetch:', { 
     type, 
     query, 
@@ -309,15 +269,6 @@ async function handleTaskSubmit(context, activity) {
     return await handleSearchAction(searchQuery, approvalId, approvalContext || {}, showDuration, permission || defaultPerm, itemType);
   } else if (action === 'select_and_approve') {
     return await handleSelectAndApprove(context, selectedUid, approvalId, permission, duration, approvalContext || {}, itemType);
-  } else if (action === 'create_new_record') {
-    // Show create record modal
-    return handleCreateRecordFetch(searchQuery, approvalContext || {});
-  } else if (action === 'submit_create_record') {
-    // Handle record creation
-    return await handleCreateRecordSubmit(context, submitData, approvalContext || {});
-  } else if (action === 'cancel_create_record') {
-    // Just close the modal
-    return null;
   } else if (action === 'close') {
     // Just close the task module
     return null;
@@ -793,112 +744,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   return null;
 }
 
-/**
- * Handle create record fetch - show the create record modal
- */
-function handleCreateRecordFetch(searchQuery, approvalContext) {
-  console.log('[TaskModule] Opening create record modal for:', { searchQuery, requester: approvalContext.requesterName });
-  
-  const createRecordCard = cards.buildCreateRecordModal(approvalContext, searchQuery);
-  
-  return {
-    task: {
-      type: 'continue',
-      value: {
-        title: 'New Record Creation',
-        height: 600,
-        width: 450,
-        card: {
-          contentType: 'application/vnd.microsoft.card.adaptive',
-          content: createRecordCard,
-        },
-      },
-    },
-  };
-}
-
-/**
- * Handle create record submit - create the record and return to search with pre-selected result
- */
-async function handleCreateRecordSubmit(context, submitData, approvalContext) {
-  const { recordTitle, recordLogin, recordPassword, recordUrl, recordNotes } = submitData;
-  
-  console.log('[TaskModule] Creating record:', { title: recordTitle, login: recordLogin });
-  
-  // Validate required fields
-  if (!recordTitle || !recordTitle.trim()) {
-    return {
-      task: {
-        type: 'message',
-        value: '❌ Title is required',
-      },
-    };
-  }
-  
-  if (!recordLogin || !recordLogin.trim()) {
-    return {
-      task: {
-        type: 'message',
-        value: '❌ Login is required',
-      },
-    };
-  }
-  
-  // Determine if we should generate password
-  const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
-  const passwordToUse = generatePassword ? '$GEN' : recordPassword;
-  
-  // Create the record
-  const result = await keeperClient.createRecord({
-    title: recordTitle.trim(),
-    login: recordLogin.trim(),
-    password: passwordToUse,
-    url: recordUrl?.trim() || null,
-    notes: recordNotes?.trim() || null,
-    generatePassword: generatePassword,
-  });
-  
-  if (!result.success) {
-    return {
-      task: {
-        type: 'message',
-        value: `❌ Failed to create record: ${result.error || 'Unknown error'}`,
-      },
-    };
-  }
-  
-  console.log('[TaskModule] Record created successfully:', result.recordUid);
-  
-  // Build the search modal with the newly created record pre-selected
-  const newRecord = {
-    uid: result.recordUid,
-    title: recordTitle.trim(),
-  };
-  
-  // Update approval context with newly created record info
-  const updatedContext = {
-    ...approvalContext,
-    newlyCreatedUid: result.recordUid,
-    newlyCreatedTitle: recordTitle.trim(),
-  };
-  
-  // Return to search modal with the new record shown and pre-selected
-  return buildSearchModal(
-    recordTitle.trim(),
-    approvalContext.approvalId,
-    false,
-    updatedContext,
-    [newRecord],  // Show only the newly created record
-    true,  // showDuration
-    'view_only',
-    result.recordUid,  // Pre-select the new record
-    'record'
-  );
-}
-
 module.exports = {
   handleTaskFetch,
   handleTaskSubmit,
-  handleCreateRecordFetch,
-  handleCreateRecordSubmit,
 };

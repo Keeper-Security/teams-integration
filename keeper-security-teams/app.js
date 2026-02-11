@@ -91,26 +91,6 @@ app.on("message", async (context) => {
       }
       return;
     }
-    
-    // Handle search_records action
-    if (action === 'search_records') {
-      console.log('[Keeper Bot] Search records action');
-      const taskModuleResponse = await handlers.handleSearchRecordsAction(context, data);
-      if (taskModuleResponse) {
-        return taskModuleResponse;
-      }
-      return;
-    }
-    
-    // Handle search_folders action
-    if (action === 'search_folders') {
-      console.log('[Keeper Bot] Search folders action');
-      const taskModuleResponse = await handlers.handleSearchFoldersAction(context, data);
-      if (taskModuleResponse) {
-        return taskModuleResponse;
-      }
-      return;
-    }
   }
   
   const text = stripMentionsText(activity);
@@ -368,6 +348,230 @@ app.on("invoke", async (context) => {
         };
       } catch (error) {
         console.error(`[Keeper Bot] Error handling ${verb}:`, error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle show_create_form (show inline create record form)
+    if (verb === 'show_create_form') {
+      try {
+        console.log(`[Keeper Bot] Processing show_create_form`);
+        const { handleShowCreateForm } = require('./handlers/approvalHandler');
+        const createFormCard = handleShowCreateForm(data);
+        
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: createFormCard,
+        };
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling show_create_form:`, error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle submit_create_record (create record and show with approval options)
+    // Uses fire-and-forget pattern: return "Processing" card immediately, then update via proactive messaging
+    if (verb === 'submit_create_record') {
+      try {
+        console.log(`[Keeper Bot] Processing submit_create_record - START`);
+        
+        // Extract form data
+        const recordTitle = activity.value?.action?.data?.recordTitle || data.recordTitle || '';
+        const recordLogin = activity.value?.action?.data?.recordLogin || data.recordLogin || '';
+        const recordPassword = activity.value?.action?.data?.recordPassword || data.recordPassword || '';
+        const recordUrl = activity.value?.action?.data?.recordUrl || data.recordUrl || '';
+        const recordNotes = activity.value?.action?.data?.recordNotes || data.recordNotes || '';
+        
+        // Validation - return form with error message if validation fails
+        if (!recordTitle?.trim() || !recordLogin?.trim()) {
+          const errors = [];
+          if (!recordTitle?.trim()) errors.push('Title is required');
+          if (!recordLogin?.trim()) errors.push('Login is required');
+          const errorMessage = errors.join('. ');
+          
+          console.log(`[Keeper Bot] Validation failed: ${errorMessage}`);
+          
+          const cards = require('./cards');
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: cards.buildRecordCreationCard({
+              ...data,
+              error: errorMessage,
+              recordTitle: recordTitle,
+              recordLogin: recordLogin,
+              recordPassword: recordPassword,
+              recordUrl: recordUrl,
+              recordNotes: recordNotes,
+            }),
+          };
+        }
+        
+        // Store context for proactive messaging
+        const conversationRef = {
+          serviceUrl: activity.serviceUrl,
+          channelId: activity.channelId,
+          conversation: activity.conversation,
+        };
+        const activityId = activity.replyToId || activity.id;
+        
+        // Fire off async record creation (don't await)
+        // Use channelService for proactive messaging since context won't be available later
+        const channelService = getChannelService();
+        
+        (async () => {
+          try {
+            console.log(`[Keeper Bot] Background: Starting record creation`);
+            const keeperClient = require('./services/keeperClient');
+            const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
+            
+            const result = await keeperClient.createRecord({
+              title: recordTitle.trim(),
+              login: recordLogin.trim(),
+              password: generatePassword ? '$GEN' : recordPassword,
+              url: recordUrl?.trim() || null,
+              notes: recordNotes?.trim() || null,
+              generatePassword: generatePassword,
+            });
+            
+            console.log(`[Keeper Bot] Background: Record creation complete`, result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
+            
+            // Build the result card with permission and duration dropdowns
+            const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('./cards/constants');
+            
+            let resultCard;
+            if (result.success) {
+              resultCard = {
+                type: 'AdaptiveCard',
+                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+                version: '1.4',
+                body: [
+                  { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
+                  { type: 'TextBlock', text: `Requester: ${data.requesterName || 'Unknown'}`, wrap: true },
+                  { type: 'TextBlock', text: `Justification: ${data.justification || 'N/A'}`, wrap: true, isSubtle: true },
+                  { 
+                    type: 'Container', 
+                    style: 'good', 
+                    spacing: 'Medium',
+                    items: [
+                      { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
+                      { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
+                    ]
+                  },
+                  { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+                  { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+                  { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+                  { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+                ],
+                actions: [
+                  {
+                    type: 'Action.Execute',
+                    title: 'Approve',
+                    style: 'positive',
+                    verb: 'approve_record',
+                    data: { 
+                      action: 'approve_record', 
+                      approvalId: data.approvalId || '', 
+                      recordUid: result.recordUid, 
+                      recordTitle: recordTitle.trim(), 
+                      requesterId: data.requesterId || '', 
+                      requesterEmail: data.requesterEmail || '', 
+                      requesterName: data.requesterName || '', 
+                      justification: data.justification || '',
+                    },
+                  },
+                  {
+                    type: 'Action.Execute',
+                    title: 'Deny',
+                    style: 'destructive',
+                    verb: 'deny_record',
+                    data: { 
+                      action: 'deny_record', 
+                      approvalId: data.approvalId || '', 
+                      recordUid: result.recordUid, 
+                      recordTitle: recordTitle.trim(), 
+                      requesterId: data.requesterId || '', 
+                      requesterEmail: data.requesterEmail || '', 
+                      requesterName: data.requesterName || '', 
+                      justification: data.justification || '',
+                    },
+                  },
+                ],
+              };
+            } else {
+              resultCard = {
+                type: 'AdaptiveCard',
+                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+                version: '1.4',
+                body: [
+                  { type: 'TextBlock', text: 'Error Creating Record', weight: 'Bolder', size: 'Large', color: 'Attention' },
+                  { type: 'TextBlock', text: result.error || 'Unknown error occurred', wrap: true },
+                ],
+                actions: [
+                  { type: 'Action.Execute', title: 'Try Again', verb: 'show_create_form', data: data },
+                ],
+              };
+            }
+            
+            // Send new message with result using channelService
+            if (channelService && channelService.isApprovalsChannelReady()) {
+              try {
+                const sent = await channelService.sendApprovalCardViaConnector(
+                  resultCard, 
+                  data.approvalId || 'create-record',
+                  result.success ? `Record "${recordTitle.trim()}" created successfully!` : null
+                );
+                console.log(`[Keeper Bot] Background: Sent result card via channelService:`, sent.success);
+              } catch (sendError) {
+                console.error(`[Keeper Bot] Background: Error sending via channelService:`, sendError.message);
+              }
+            } else {
+              console.error(`[Keeper Bot] Background: ChannelService not available for proactive messaging`);
+            }
+          } catch (bgError) {
+            console.error(`[Keeper Bot] Background: Error in record creation:`, bgError.message);
+          }
+        })();
+        
+        // Return "Processing" card immediately (within Teams timeout)
+        console.log(`[Keeper Bot] Returning processing card immediately`);
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: {
+            type: 'AdaptiveCard',
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            version: '1.4',
+            body: [
+              { type: 'TextBlock', text: 'Creating Record...', weight: 'Bolder', size: 'Large' },
+              { type: 'TextBlock', text: `Title: ${recordTitle.trim()}`, wrap: true },
+              { type: 'TextBlock', text: 'Please wait. The result will appear below shortly.', wrap: true, isSubtle: true },
+            ],
+            actions: [],
+          },
+        };
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling submit_create_record:`, error);
+        console.error(`[Keeper Bot] Error stack:`, error.stack);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+    
+    // Handle cancel_create_form (return to search results card)
+    if (verb === 'cancel_create_form') {
+      try {
+        console.log(`[Keeper Bot] Processing cancel_create_form`);
+        const { handleCancelCreateForm } = require('./handlers/approvalHandler');
+        const searchCard = await handleCancelCreateForm(data);
+        
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: searchCard,
+        };
+      } catch (error) {
+        console.error(`[Keeper Bot] Error handling cancel_create_form:`, error);
         return { statusCode: 500, body: error.message };
       }
     }
@@ -644,26 +848,6 @@ app.on("cardAction", async (context) => {
     // Return undefined to let the invoke handler process it
     // Teams will convert this to an invoke activity automatically
     return undefined;
-  }
-
-  // Handle search_records action without msteams (fallback)
-  if (action === 'search_records') {
-    console.log('[Keeper Bot] Search records action without msteams, handling manually');
-    const taskModuleResponse = await handlers.handleSearchRecordsAction(context, data);
-    if (taskModuleResponse) {
-      return taskModuleResponse;
-    }
-    return;
-  }
-  
-  // Handle search_folders action without msteams (fallback)
-  if (action === 'search_folders') {
-    console.log('[Keeper Bot] Search folders action without msteams, handling manually');
-    const taskModuleResponse = await handlers.handleSearchFoldersAction(context, data);
-    if (taskModuleResponse) {
-      return taskModuleResponse;
-    }
-    return;
   }
 
   // Route to appropriate handler based on action type
