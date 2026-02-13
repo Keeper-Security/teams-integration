@@ -581,7 +581,7 @@ async function handleStatus(context) {
   if (isHealthy) {
     await context.send('✅ **Keeper Status:** Connected\n\n' +
       '• Service URL: `' + (config.keeper?.serviceUrl || 'Not configured') + '`\n' +
-      '• PEDM Polling: ' + (config.pedm?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
+      '• EPM Polling: ' + (config.pedm?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
       '• Device Approval: ' + (config.deviceApproval?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
       '• Search: ' + (config.features?.enableSearch ? '✅ Enabled' : '❌ Disabled')
     );

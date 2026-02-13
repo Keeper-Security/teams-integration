@@ -47,9 +47,21 @@ const SHARE_DURATION_OPTIONS = [
   { title: '7 days', value: '7d' },
 ];
 
+/**
+ * Self-destruct duration options for auto-deleting records
+ */
+const SELF_DESTRUCT_DURATION_OPTIONS = [
+  { title: '1 hour', value: '1h' },
+  { title: '24 hours', value: '24h' },
+  { title: '7 days', value: '7d' },
+  { title: '30 days', value: '30d' },
+  { title: '90 days', value: '90d' },
+];
+
 module.exports = {
   RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS,
   DURATION_OPTIONS,
   SHARE_DURATION_OPTIONS,
+  SELF_DESTRUCT_DURATION_OPTIONS,
 };

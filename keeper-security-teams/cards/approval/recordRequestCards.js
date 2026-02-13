@@ -3,7 +3,7 @@
  * Cards for record access requests, search results, and confirmations
  */
 
-const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('../constants');
+const { RECORD_PERMISSIONS, DURATION_OPTIONS, SELF_DESTRUCT_DURATION_OPTIONS } = require('../constants');
 const { 
   buildSearchCardHeader, 
   buildNoResultsSection, 
@@ -538,7 +538,20 @@ function buildRecordCreationCard({
     { type: 'TextBlock', text: 'Notes (optional)', weight: 'Bolder', spacing: 'Small' },
     { type: 'Input.Text', id: 'recordNotes', placeholder: 'Add any notes...', isMultiline: true, value: prevRecordNotes || '' },
     
-    { type: 'TextBlock', text: '* Required fields', size: 'Small', isSubtle: true, spacing: 'Small' }
+    // Divider before self-destruct options
+    { type: 'TextBlock', text: '─────────────────────────────', isSubtle: true, spacing: 'Medium' },
+    
+    // Self-destruct section header
+    { type: 'TextBlock', text: 'Self-Destruct Options', weight: 'Bolder', size: 'Medium', spacing: 'Small' },
+    { type: 'TextBlock', text: 'Enable this to automatically delete the record after a set time period.', size: 'Small', isSubtle: true, wrap: true },
+    
+    // Self-destruct toggle
+    { type: 'Input.Toggle', id: 'selfDestruct', title: 'Enable Self-Destruct', value: 'false' },
+    
+    // Self-destruct duration dropdown
+    { type: 'TextBlock', text: 'Delete After (only applies if self-destruct is enabled)', weight: 'Bolder', spacing: 'Small' },
+    { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: '24h', choices: SELF_DESTRUCT_DURATION_OPTIONS },
+    { type: 'TextBlock', text: 'This duration is ignored if self-destruct is not enabled above.', size: 'Small', isSubtle: true, wrap: true, color: 'Attention' },
   );
   
   return {

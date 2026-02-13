@@ -4,6 +4,10 @@
  * Handles Adaptive Card action submissions for PEDM elevation requests:
  * - Approve PEDM request
  * - Deny PEDM request
+ * 
+ * Features (matching Slack implementation):
+ * - In-place card updates (not new messages)
+ * - Already processed request handling
  */
 
 const keeperClient = require('../services/keeperClient');
@@ -21,100 +25,190 @@ function getApproverInfo(activity) {
 }
 
 /**
+ * Build an "already processed" card when the request was handled elsewhere
+ */
+function buildAlreadyProcessedCard(username, approvalUid) {
+  return {
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      {
+        type: 'Container',
+        style: 'warning',
+        items: [
+          {
+            type: 'TextBlock',
+            text: 'Request Already Processed',
+            weight: 'Bolder',
+            size: 'Medium',
+          },
+        ],
+      },
+      {
+        type: 'TextBlock',
+        text: 'This EPM request for **' + username + '** has already been processed by another admin or has expired.',
+        wrap: true,
+        spacing: 'Medium',
+      },
+      {
+        type: 'FactSet',
+        facts: [
+          { title: 'Approval UID', value: approvalUid },
+          { title: 'Status', value: 'Already Processed' },
+        ],
+        spacing: 'Medium',
+      },
+    ],
+  };
+}
+
+/**
  * Handle approval of a PEDM elevation request
+ * Returns Adaptive Card for in-place update
  */
 async function handlePedmApproval(context, data) {
   const approver = getApproverInfo(context.activity);
   const approvalUid = data.approvalUid;
   const username = data.username || 'Unknown User';
   const command = data.command || 'Unknown Command';
+  const agentUid = data.agentUid || '';
   
   if (!approvalUid) {
-    await context.send('❌ Error: Missing approval UID');
-    return;
+    // Return error card for in-place update
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [{
+        type: 'TextBlock',
+        text: 'Error: Missing approval UID',
+        color: 'Attention',
+      }],
+    };
   }
   
-  await context.send('🔄 Approving PEDM request...');
+  console.log('[PEDM Handler] Approving request:', approvalUid);
   
   const result = await keeperClient.approvePedmRequest(approvalUid);
   
   if (result.success) {
-    const approvedCard = cards.buildPedmApprovedCard(
+    // Return approved card for in-place update
+    return cards.buildPedmApprovedCard(
       approver.name,
       username,
-      command
+      command,
+      approvalUid,
+      agentUid
     );
-    
-    await context.send({
-      type: 'message',
-      attachments: [{
-        contentType: 'application/vnd.microsoft.card.adaptive',
-        content: approvedCard,
-      }],
-    });
-    
-    await context.send('✅ PEDM request approved for **' + username + '**');
+  } else if (result.already_processed) {
+    // Return "already processed" card (like Slack does)
+    console.log('[PEDM Handler] Request already processed:', approvalUid);
+    return buildAlreadyProcessedCard(username, approvalUid);
   } else {
-    await context.send('❌ Failed to approve PEDM request: ' + result.error);
+    // Return error card
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [
+        {
+          type: 'TextBlock',
+          text: 'Failed to Approve EPM Request',
+          weight: 'Bolder',
+          color: 'Attention',
+        },
+        {
+          type: 'TextBlock',
+          text: result.error || 'Unknown error',
+          wrap: true,
+        },
+      ],
+    };
   }
 }
 
 /**
  * Handle denial of a PEDM elevation request
+ * Returns Adaptive Card for in-place update
  */
 async function handlePedmDenial(context, data) {
   const approver = getApproverInfo(context.activity);
   const approvalUid = data.approvalUid;
   const username = data.username || 'Unknown User';
   const command = data.command || 'Unknown Command';
+  const agentUid = data.agentUid || '';
   
   if (!approvalUid) {
-    await context.send('❌ Error: Missing approval UID');
-    return;
+    // Return error card for in-place update
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [{
+        type: 'TextBlock',
+        text: 'Error: Missing approval UID',
+        color: 'Attention',
+      }],
+    };
   }
   
-  await context.send('🔄 Denying PEDM request...');
+  console.log('[PEDM Handler] Denying request:', approvalUid);
   
   const result = await keeperClient.denyPedmRequest(approvalUid);
   
   if (result.success) {
-    const deniedCard = cards.buildPedmDeniedCard(
+    // Return denied card for in-place update
+    return cards.buildPedmDeniedCard(
       approver.name,
       username,
-      command
+      command,
+      approvalUid,
+      agentUid
     );
-    
-    await context.send({
-      type: 'message',
-      attachments: [{
-        contentType: 'application/vnd.microsoft.card.adaptive',
-        content: deniedCard,
-      }],
-    });
-    
-    await context.send('❌ PEDM request denied for **' + username + '**');
+  } else if (result.already_processed) {
+    // Return "already processed" card (like Slack does)
+    console.log('[PEDM Handler] Request already processed:', approvalUid);
+    return buildAlreadyProcessedCard(username, approvalUid);
   } else {
-    await context.send('❌ Failed to deny PEDM request: ' + result.error);
+    // Return error card
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [
+        {
+          type: 'TextBlock',
+          text: 'Failed to Deny EPM Request',
+          weight: 'Bolder',
+          color: 'Attention',
+        },
+        {
+          type: 'TextBlock',
+          text: result.error || 'Unknown error',
+          wrap: true,
+        },
+      ],
+    };
   }
 }
 
 /**
  * Route PEDM card action to appropriate handler
+ * Returns an Adaptive Card for in-place update (or null if action not handled)
  */
 async function routePedmAction(context, data) {
   const action = data.action;
   
   switch (action) {
     case 'approve_pedm':
-      await handlePedmApproval(context, data);
-      return true;
+      return await handlePedmApproval(context, data);
       
     case 'deny_pedm':
-      await handlePedmDenial(context, data);
-      return true;
+      return await handlePedmDenial(context, data);
       
     default:
-      return false;
+      return null;
   }
 }
 

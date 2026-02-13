@@ -368,9 +368,10 @@ class KeeperClient {
    * @param {string} params.url - Website URL
    * @param {string} params.notes - Notes
    * @param {boolean} params.generatePassword - Whether to auto-generate password
+   * @param {string} params.selfDestructDuration - Self-destruct duration (e.g., '1h', '24h', '7d', '30d', '90d')
    * @returns {Promise<Object>} - Result with success, recordUid, etc.
    */
-  async createRecord({ title, login, password, url, notes, generatePassword = false }) {
+  async createRecord({ title, login, password, url, notes, generatePassword = false, selfDestructDuration = null }) {
     try {
       if (!title || !title.trim()) {
         return { success: false, error: 'Title is required' };
@@ -389,6 +390,11 @@ class KeeperClient {
       if (notes && notes.trim()) {
         const notesForCli = notes.replace(/\n/g, '\\n');
         commandParts.push('--notes ' + shellEscape(notesForCli));
+      }
+      
+      // Add self-destruct duration if provided
+      if (selfDestructDuration && selfDestructDuration.trim()) {
+        commandParts.push('--self-destruct ' + selfDestructDuration);
       }
       
       // Add login if provided
@@ -476,7 +482,7 @@ class KeeperClient {
 
   async syncPedmData() {
     try {
-      const result = await this._executeCommandAsync('pedm sync-down', 30);
+      const result = await this._executeCommandAsync('epm sync-down', 30);
       return result?.status === 'success';
     } catch (error) {
       console.error('[KeeperClient] PEDM sync failed:', error.message);
@@ -488,7 +494,7 @@ class KeeperClient {
     try {
       await this.syncPedmData();
       
-      const command = 'pedm approval list --type pending --format=json';
+      const command = 'epm approval list --type pending --format=json';
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
@@ -509,13 +515,27 @@ class KeeperClient {
 
   async approvePedmRequest(approvalUid) {
     try {
-      const command = 'pedm approval action --approve ' + approvalUid;
+      const command = 'epm approval action --approve ' + approvalUid;
       const result = await this._executeCommandAsync(command, 15);
       
       if (result?.status === 'success') {
         return { success: true };
       } else {
-        return { success: false, error: result?.message || 'Failed to approve PEDM request' };
+        const errorMsg = this._formatError(result?.message) || 'Failed to approve PEDM request';
+        
+        // Check if this is the "already processed" error (like Slack does)
+        if (errorMsg.includes('does not exist or cannot be modified') || 
+            errorMsg.includes('Approval request does not exist') ||
+            errorMsg.includes('not found') ||
+            errorMsg.includes('already')) {
+          return { 
+            success: false, 
+            error: errorMsg,
+            already_processed: true 
+          };
+        }
+        
+        return { success: false, error: errorMsg };
       }
     } catch (error) {
       return { success: false, error: error.message };
@@ -524,13 +544,27 @@ class KeeperClient {
 
   async denyPedmRequest(approvalUid) {
     try {
-      const command = 'pedm approval action --deny ' + approvalUid;
+      const command = 'epm approval action --deny ' + approvalUid;
       const result = await this._executeCommandAsync(command, 15);
       
       if (result?.status === 'success') {
         return { success: true };
       } else {
-        return { success: false, error: result?.message || 'Failed to deny PEDM request' };
+        const errorMsg = this._formatError(result?.message) || 'Failed to deny PEDM request';
+        
+        // Check if this is the "already processed" error (like Slack does)
+        if (errorMsg.includes('does not exist or cannot be modified') || 
+            errorMsg.includes('Approval request does not exist') ||
+            errorMsg.includes('not found') ||
+            errorMsg.includes('already')) {
+          return { 
+            success: false, 
+            error: errorMsg,
+            already_processed: true 
+          };
+        }
+        
+        return { success: false, error: errorMsg };
       }
     } catch (error) {
       return { success: false, error: error.message };

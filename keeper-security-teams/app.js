@@ -383,6 +383,13 @@ app.on("invoke", async (context) => {
         const recordUrl = activity.value?.action?.data?.recordUrl || data.recordUrl || '';
         const recordNotes = activity.value?.action?.data?.recordNotes || data.recordNotes || '';
         
+        // Extract self-destruct options
+        const selfDestructToggle = activity.value?.action?.data?.selfDestruct || data.selfDestruct || 'false';
+        const selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
+        const selfDestructDuration = selfDestructEnabled 
+          ? (activity.value?.action?.data?.selfDestructDuration || data.selfDestructDuration || '24h')
+          : null;
+        
         // Validation - return form with error message if validation fails
         if (!recordTitle?.trim() || !recordLogin?.trim()) {
           const errors = [];
@@ -422,7 +429,7 @@ app.on("invoke", async (context) => {
         
         (async () => {
           try {
-            console.log(`[Keeper Bot] Background: Starting record creation`);
+            console.log(`[Keeper Bot] Background: Starting record creation${selfDestructEnabled ? ` (self-destruct: ${selfDestructDuration})` : ''}`);
             const keeperClient = require('./services/keeperClient');
             const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
             
@@ -433,6 +440,7 @@ app.on("invoke", async (context) => {
               url: recordUrl?.trim() || null,
               notes: recordNotes?.trim() || null,
               generatePassword: generatePassword,
+              selfDestructDuration: selfDestructDuration,
             });
             
             console.log(`[Keeper Bot] Background: Record creation complete`, result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
@@ -442,28 +450,50 @@ app.on("invoke", async (context) => {
             
             let resultCard;
             if (result.success) {
+              // Build body elements
+              const bodyElements = [
+                { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
+                { type: 'TextBlock', text: `Requester: ${data.requesterName || 'Unknown'}`, wrap: true },
+                { type: 'TextBlock', text: `Justification: ${data.justification || 'N/A'}`, wrap: true, isSubtle: true },
+                { 
+                  type: 'Container', 
+                  style: 'good', 
+                  spacing: 'Medium',
+                  items: [
+                    { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
+                    { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
+                  ]
+                },
+              ];
+              
+              // Add self-destruct notice if enabled
+              if (selfDestructEnabled) {
+                const durationLabels = { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days' };
+                const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
+                bodyElements.push({
+                  type: 'Container',
+                  style: 'attention',
+                  spacing: 'Medium',
+                  items: [
+                    { type: 'TextBlock', text: 'Self-Destruct Enabled', weight: 'Bolder', wrap: true },
+                    { type: 'TextBlock', text: `This record will auto-delete after ${durationLabel}`, size: 'Small', wrap: true },
+                  ]
+                });
+              }
+              
+              // Add permission/duration selectors
+              bodyElements.push(
+                { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+                { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+                { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+                { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
+              );
+              
               resultCard = {
                 type: 'AdaptiveCard',
                 '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
                 version: '1.4',
-                body: [
-                  { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
-                  { type: 'TextBlock', text: `Requester: ${data.requesterName || 'Unknown'}`, wrap: true },
-                  { type: 'TextBlock', text: `Justification: ${data.justification || 'N/A'}`, wrap: true, isSubtle: true },
-                  { 
-                    type: 'Container', 
-                    style: 'good', 
-                    spacing: 'Medium',
-                    items: [
-                      { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
-                      { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
-                    ]
-                  },
-                  { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-                  { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-                  { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-                  { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
-                ],
+                body: bodyElements,
                 actions: [
                   {
                     type: 'Action.Execute',
@@ -479,6 +509,8 @@ app.on("invoke", async (context) => {
                       requesterEmail: data.requesterEmail || '', 
                       requesterName: data.requesterName || '', 
                       justification: data.justification || '',
+                      selfDestruct: selfDestructEnabled,
+                      selfDestructDuration: selfDestructDuration,
                     },
                   },
                   {
@@ -751,7 +783,22 @@ app.on("invoke", async (context) => {
       try {
         console.log(`[Keeper Bot] Processing ${action} from adaptiveCard/action (Universal Action)`);
         
-        // Call the handler and get the updated card
+        // Check if this is a PEDM action
+        if (action.includes('pedm')) {
+          // PEDM actions return a card directly for in-place update (like Slack does)
+          const resultCard = await handlers.routePedmAction(context, data);
+          if (resultCard) {
+            console.log(`[Keeper Bot] PEDM action ${action} completed, updating card in-place`);
+            return {
+              statusCode: 200,
+              type: 'application/vnd.microsoft.card.adaptive',
+              value: resultCard,
+            };
+          }
+          return { statusCode: 200 };
+        }
+        
+        // Call the handler and get the updated card for other approval types
         const result = await handlers.routeApprovalActionWithCardResponse(context, data);
         
         console.log(`[Keeper Bot] Action ${action} completed, returning updated card`);
@@ -859,7 +906,17 @@ app.on("cardAction", async (context) => {
         await handlers.routeApprovalAction(context, data);
         console.log(`[Keeper Bot] Action ${action} completed`);
       } else if (action.includes('pedm')) {
-        await handlers.routePedmAction(context, data);
+        // PEDM actions return a card for in-place update (like Slack does)
+        const resultCard = await handlers.routePedmAction(context, data);
+        if (resultCard) {
+          console.log(`[Keeper Bot] PEDM action ${action} completed, updating card in-place`);
+          // Return card for in-place update
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: resultCard,
+          };
+        }
       } else if (action.includes('device')) {
         await handlers.routeDeviceAction(context, data);
       }
@@ -883,7 +940,7 @@ const startPollers = () => {
   if (config.pedm.enabled) {
     pedmPoller = new PedmPoller(app);
     pedmPoller.start();
-    console.log('[Keeper Bot] PEDM poller started');
+    console.log('[Keeper Bot] EPM poller started');
   }
 
   if (config.deviceApproval.enabled) {
@@ -914,10 +971,37 @@ process.on('SIGTERM', () => {
 
 // ==================== App Ready Hook ====================
 
-// Extend the start method to initialize pollers
+// Extend the start method to initialize pollers and check connectivity
 const originalStart = app.start.bind(app);
 app.start = async (...args) => {
   const result = await originalStart(...args);
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('Starting Keeper Commander Teams Bot');
+  console.log('='.repeat(60));
+  
+  // Check Keeper Service Mode connectivity
+  const keeperClient = require('./services/keeperClient');
+  const serviceUrl = config.keeper?.serviceUrl || process.env.KEEPER_SERVICE_URL || 'http://localhost:3001/api/v2/';
+  
+  try {
+    const isHealthy = await keeperClient.healthCheck();
+    
+    if (isHealthy) {
+      console.log('[Keeper Bot] ✓ Keeper Service Mode is accessible');
+    } else {
+      console.warn('[Keeper Bot] ⚠ Cannot reach Keeper Service Mode');
+      console.warn(`   URL: ${serviceUrl}`);
+      console.warn('   The bot will start but commands may fail.');
+    }
+  } catch (error) {
+    console.warn('[Keeper Bot] ⚠ Cannot reach Keeper Service Mode');
+    console.warn(`   URL: ${serviceUrl}`);
+    console.warn(`   Error: ${error.message}`);
+    console.warn('   The bot will start but commands may fail.');
+  }
+  
+  console.log('='.repeat(60) + '\n');
   
   // Start background pollers after app is running
   setTimeout(() => {

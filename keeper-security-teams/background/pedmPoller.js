@@ -10,6 +10,62 @@ const { getChannelService } = require('../services');
 const cards = require('../cards');
 const config = require('../config');
 
+/**
+ * Parse PEDM request data from API response
+ * Extracts fields from account_info and application_info arrays (like Slack does)
+ * 
+ * @param {Object} data - Raw PEDM request data from API
+ * @returns {Object} - Parsed PEDM request with flat properties
+ */
+function parsePedmRequest(data) {
+  // Extract username from account_info array
+  let username = '';
+  const accountInfo = data.account_info || [];
+  for (const info of accountInfo) {
+    if (typeof info === 'string' && info.startsWith('Username=')) {
+      username = info.split('=')[1] || '';
+      break;
+    }
+  }
+  
+  // Extract fields from application_info array
+  let description = '';
+  let fileName = '';
+  let filePath = '';
+  let command = '';
+  
+  const applicationInfo = data.application_info || [];
+  for (const info of applicationInfo) {
+    if (typeof info !== 'string') continue;
+    
+    if (info.startsWith('Description=')) {
+      description = info.split('=').slice(1).join('=') || '';
+    } else if (info.startsWith('FileName=')) {
+      fileName = info.split('=').slice(1).join('=') || '';
+    } else if (info.startsWith('FilePath=')) {
+      filePath = info.split('=').slice(1).join('=') || '';
+    } else if (info.startsWith('CommandLine=')) {
+      command = info.split('=').slice(1).join('=') || '';
+    }
+  }
+  
+  // Return parsed request with fallbacks to direct properties
+  return {
+    approvalUid: data.approval_uid || data.approvalUid || data.id || '',
+    approvalType: data.approval_type || data.type || 'PrivilegeElevation',
+    status: data.status || 'Pending',
+    agentUid: data.agent_uid || data.agentUid || '',
+    username: username || data.username || data.user || 'Unknown',
+    command: command || data.command_line || data.command || '',
+    fileName: fileName || data.file_name || data.fileName || '',
+    filePath: filePath || data.file_path || data.filePath || '',
+    description: description || data.description || '',
+    justification: data.justification || '',
+    expireIn: data.expire_in || data.expireIn || 30,
+    created: data.created || data.timestamp || '',
+  };
+}
+
 class PedmPoller {
   constructor(teamsApp) {
     this.teamsApp = teamsApp;
@@ -93,22 +149,30 @@ class PedmPoller {
   /**
    * Post a PEDM approval card to the approvals channel
    */
-  async postApprovalCard(request) {
-    const approvalUid = request.approval_uid || request.approvalUid || request.id;
+  async postApprovalCard(rawRequest) {
+    // Parse the request to extract fields from arrays (like Slack does)
+    const request = parsePedmRequest(rawRequest);
     
-    console.log('[PEDM Poller] Posting card for: ' + approvalUid);
+    console.log('[PEDM Poller] Posting card for: ' + request.approvalUid);
+    console.log('[PEDM Poller] Parsed request:', JSON.stringify({
+      approvalUid: request.approvalUid,
+      username: request.username,
+      approvalType: request.approvalType,
+      agentUid: request.agentUid,
+    }));
     
     const card = cards.buildPedmApprovalCard({
-      approvalUid: approvalUid,
-      approvalType: request.approval_type || request.type || 'PrivilegeElevation',
-      username: request.username || request.user || 'Unknown',
-      command: request.command_line || request.command,
-      fileName: request.file_name || request.fileName,
-      filePath: request.file_path || request.filePath,
+      approvalUid: request.approvalUid,
+      approvalType: request.approvalType,
+      agentUid: request.agentUid,
+      username: request.username,
+      command: request.command,
+      fileName: request.fileName,
+      filePath: request.filePath,
       description: request.description,
       justification: request.justification,
-      expireIn: request.expire_in || request.expireIn,
-      created: request.created || request.timestamp,
+      expireIn: request.expireIn,
+      created: request.created,
     });
     
     // Use ChannelService to send to approvals channel
@@ -117,15 +181,15 @@ class PedmPoller {
     if (channelService && channelService.isApprovalsChannelReady()) {
       const sent = await channelService.sendApprovalCard(
         card,
-        `⚡ **Privilege Elevation Request** from ${request.username || 'Unknown User'}`
+        `**Endpoint Privilege Manager Request** from ${request.username}`
       );
       
       if (sent) {
-        console.log('[PEDM Poller] Card posted to approvals channel: ' + approvalUid);
+        console.log('[PEDM Poller] Card posted to approvals channel: ' + request.approvalUid);
         this.consecutiveErrors = 0;
         return true;
       } else {
-        console.warn('[PEDM Poller] Failed to post card to channel: ' + approvalUid);
+        console.warn('[PEDM Poller] Failed to post card to channel: ' + request.approvalUid);
         this.consecutiveErrors++;
         return false;
       }

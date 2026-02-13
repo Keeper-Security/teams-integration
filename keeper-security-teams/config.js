@@ -53,17 +53,17 @@ const config = {
     approvalsTeamId: process.env.APPROVALS_TEAM_ID || null,
   },
 
-  // ==================== PEDM Configuration ====================
+  // ==================== EPM (Endpoint Privilege Manager) Configuration ====================
   pedm: {
     /**
-     * Whether PEDM polling is enabled
+     * Whether EPM polling is enabled
      */
-    enabled: process.env.PEDM_ENABLED === 'true',
+    enabled: process.env.EPM_ENABLED === 'true',
     
     /**
-     * Polling interval in milliseconds (default: 2 minutes)
+     * Polling interval in milliseconds (env var is in seconds, default: 120 seconds)
      */
-    pollingInterval: parseInt(process.env.PEDM_POLLING_INTERVAL) || 120000,
+    pollingInterval: (parseInt(process.env.EPM_POLL_INTERVAL) || 120) * 1000,
   },
 
   // ==================== Device Approval Configuration ====================
@@ -74,9 +74,9 @@ const config = {
     enabled: process.env.DEVICE_APPROVAL_ENABLED === 'true',
     
     /**
-     * Polling interval in milliseconds (default: 2 minutes)
+     * Polling interval in milliseconds (env var is in seconds, default: 120 seconds)
      */
-    pollingInterval: parseInt(process.env.DEVICE_APPROVAL_POLLING_INTERVAL) || 120000,
+    pollingInterval: (parseInt(process.env.DEVICE_POLL_INTERVAL) || 120) * 1000,
   },
 
   // ==================== Feature Flags ====================

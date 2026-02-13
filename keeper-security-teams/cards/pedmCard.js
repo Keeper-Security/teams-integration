@@ -7,10 +7,12 @@
 
 /**
  * Build an Adaptive Card for PEDM elevation request
+ * Matches Slack implementation with all fields including agentUid
  */
 function buildPedmApprovalCard({
   approvalUid,
   approvalType,
+  agentUid,
   username,
   command,
   fileName,
@@ -20,14 +22,17 @@ function buildPedmApprovalCard({
   expireIn,
   created,
 }) {
-  const isCommandLine = approvalType === 'CommandLine';
-  const icon = isCommandLine ? '⌨️' : '🔓';
-  const title = isCommandLine ? 'Command Execution Request' : 'Privilege Elevation Request';
+  const title = 'Endpoint Privilege Manage Request';
   
   const facts = [
     { title: 'User', value: username || 'Unknown' },
     { title: 'Type', value: approvalType || 'Unknown' },
   ];
+  
+  // Add Agent UID (like Slack displays)
+  if (agentUid) {
+    facts.push({ title: 'Agent UID', value: agentUid });
+  }
   
   if (fileName) {
     facts.push({ title: 'File', value: fileName });
@@ -54,24 +59,8 @@ function buildPedmApprovalCard({
         type: 'Container',
         style: 'warning',
         items: [
-          {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [{ type: 'TextBlock', text: icon, size: 'ExtraLarge' }],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  { type: 'TextBlock', text: title, weight: 'Bolder', size: 'Large', color: 'Warning' },
-                  { type: 'TextBlock', text: 'UID: ' + approvalUid, size: 'Small', isSubtle: true },
-                ],
-              },
-            ],
-          },
+          { type: 'TextBlock', text: title, weight: 'Bolder', size: 'Large', color: 'Warning' },
+          { type: 'TextBlock', text: 'UID: ' + approvalUid, size: 'Small', isSubtle: true },
         ],
       },
       {
@@ -104,23 +93,27 @@ function buildPedmApprovalCard({
     ],
     actions: [
       {
-        type: 'Action.Submit',
-        title: '✅ Approve',
+        type: 'Action.Execute',
+        title: 'Approve',
         style: 'positive',
+        verb: 'approve_pedm',
         data: {
           action: 'approve_pedm',
           approvalUid: approvalUid,
+          agentUid: agentUid,
           username: username,
           command: command || fileName,
         },
       },
       {
-        type: 'Action.Submit',
-        title: '❌ Deny',
+        type: 'Action.Execute',
+        title: 'Deny',
         style: 'destructive',
+        verb: 'deny_pedm',
         data: {
           action: 'deny_pedm',
           approvalUid: approvalUid,
+          agentUid: agentUid,
           username: username,
           command: command || fileName,
         },
@@ -131,8 +124,26 @@ function buildPedmApprovalCard({
 
 /**
  * Build an Adaptive Card showing PEDM request was approved
+ * Updated to include approvalUid and agentUid (matching Slack)
  */
-function buildPedmApprovedCard(approverName, username, command) {
+function buildPedmApprovedCard(approverName, username, command, approvalUid, agentUid) {
+  const facts = [
+    { title: 'User', value: username },
+    { title: 'Approved by', value: approverName },
+  ];
+  
+  if (approvalUid) {
+    facts.push({ title: 'Approval UID', value: approvalUid });
+  }
+  
+  if (agentUid) {
+    facts.push({ title: 'Agent UID', value: agentUid });
+  }
+  
+  if (command) {
+    facts.push({ title: 'Command/File', value: command });
+  }
+  
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -142,36 +153,13 @@ function buildPedmApprovedCard(approverName, username, command) {
         type: 'Container',
         style: 'good',
         items: [
-          {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [{ type: 'TextBlock', text: '✅', size: 'Large' }],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  { type: 'TextBlock', text: 'PEDM Request Approved', weight: 'Bolder', size: 'Medium', color: 'Good' },
-                ],
-              },
-            ],
-          },
+          { type: 'TextBlock', text: 'EPM Request Approved', weight: 'Bolder', size: 'Medium', color: 'Good' },
         ],
       },
       {
         type: 'Container',
         items: [
-          {
-            type: 'FactSet',
-            facts: [
-              { title: 'User', value: username },
-              { title: 'Approved by', value: approverName },
-              ...(command ? [{ title: 'Command/File', value: command }] : []),
-            ],
-          },
+          { type: 'FactSet', facts: facts },
         ],
       },
     ],
@@ -180,8 +168,26 @@ function buildPedmApprovedCard(approverName, username, command) {
 
 /**
  * Build an Adaptive Card showing PEDM request was denied
+ * Updated to include approvalUid and agentUid (matching Slack)
  */
-function buildPedmDeniedCard(approverName, username, command) {
+function buildPedmDeniedCard(approverName, username, command, approvalUid, agentUid) {
+  const facts = [
+    { title: 'User', value: username },
+    { title: 'Denied by', value: approverName },
+  ];
+  
+  if (approvalUid) {
+    facts.push({ title: 'Approval UID', value: approvalUid });
+  }
+  
+  if (agentUid) {
+    facts.push({ title: 'Agent UID', value: agentUid });
+  }
+  
+  if (command) {
+    facts.push({ title: 'Command/File', value: command });
+  }
+  
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -191,36 +197,13 @@ function buildPedmDeniedCard(approverName, username, command) {
         type: 'Container',
         style: 'attention',
         items: [
-          {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [{ type: 'TextBlock', text: '❌', size: 'Large' }],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  { type: 'TextBlock', text: 'PEDM Request Denied', weight: 'Bolder', size: 'Medium', color: 'Attention' },
-                ],
-              },
-            ],
-          },
+          { type: 'TextBlock', text: 'EPM Request Denied', weight: 'Bolder', size: 'Medium', color: 'Attention' },
         ],
       },
       {
         type: 'Container',
         items: [
-          {
-            type: 'FactSet',
-            facts: [
-              { title: 'User', value: username },
-              { title: 'Denied by', value: approverName },
-              ...(command ? [{ title: 'Command/File', value: command }] : []),
-            ],
-          },
+          { type: 'FactSet', facts: facts },
         ],
       },
     ],
@@ -230,7 +213,14 @@ function buildPedmDeniedCard(approverName, username, command) {
 function formatDate(dateStr) {
   try {
     const date = new Date(dateStr);
-    return date.toLocaleString();
+    return date.toLocaleString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
   } catch (e) {
     return dateStr;
   }
