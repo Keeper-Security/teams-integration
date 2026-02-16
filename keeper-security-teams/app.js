@@ -783,12 +783,27 @@ app.on("invoke", async (context) => {
       try {
         console.log(`[Keeper Bot] Processing ${action} from adaptiveCard/action (Universal Action)`);
         
-        // Check if this is a PEDM action
+        // Check if this is a PEDM/EPM action
         if (action.includes('pedm')) {
-          // PEDM actions return a card directly for in-place update (like Slack does)
+          // EPM actions return a card directly for in-place update (like Slack does)
           const resultCard = await handlers.routePedmAction(context, data);
           if (resultCard) {
-            console.log(`[Keeper Bot] PEDM action ${action} completed, updating card in-place`);
+            console.log(`[Keeper Bot] EPM action ${action} completed, updating card in-place`);
+            return {
+              statusCode: 200,
+              type: 'application/vnd.microsoft.card.adaptive',
+              value: resultCard,
+            };
+          }
+          return { statusCode: 200 };
+        }
+        
+        // Check if this is a Device Approval action
+        if (action.includes('device')) {
+          // Device actions return a card directly for in-place update (like Slack does)
+          const resultCard = await handlers.routeDeviceAction(context, data);
+          if (resultCard) {
+            console.log(`[Keeper Bot] Device action ${action} completed, updating card in-place`);
             return {
               statusCode: 200,
               type: 'application/vnd.microsoft.card.adaptive',
@@ -906,10 +921,10 @@ app.on("cardAction", async (context) => {
         await handlers.routeApprovalAction(context, data);
         console.log(`[Keeper Bot] Action ${action} completed`);
       } else if (action.includes('pedm')) {
-        // PEDM actions return a card for in-place update (like Slack does)
+        // EPM actions return a card for in-place update (like Slack does)
         const resultCard = await handlers.routePedmAction(context, data);
         if (resultCard) {
-          console.log(`[Keeper Bot] PEDM action ${action} completed, updating card in-place`);
+          console.log(`[Keeper Bot] EPM action ${action} completed, updating card in-place`);
           // Return card for in-place update
           return {
             statusCode: 200,
@@ -918,14 +933,24 @@ app.on("cardAction", async (context) => {
           };
         }
       } else if (action.includes('device')) {
-        await handlers.routeDeviceAction(context, data);
+        // Device actions return a card for in-place update (like Slack does)
+        const resultCard = await handlers.routeDeviceAction(context, data);
+        if (resultCard) {
+          console.log(`[Keeper Bot] Device action ${action} completed, updating card in-place`);
+          // Return card for in-place update
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: resultCard,
+          };
+        }
       }
     } else {
       console.log(`[Keeper Bot] Unknown action: ${action}`);
     }
   } catch (error) {
     console.error(`[Keeper Bot] Error handling card action:`, error);
-    await context.send(`❌ Error processing action: ${error.message}`);
+    await context.send(`Error processing action: ${error.message}`);
   }
 });
 

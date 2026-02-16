@@ -4,6 +4,10 @@
  * Handles Adaptive Card action submissions for Cloud SSO device approvals:
  * - Approve device
  * - Deny device
+ * 
+ * Features (matching Slack implementation):
+ * - In-place card updates (not new messages)
+ * - Already processed request handling
  */
 
 const keeperClient = require('../services/keeperClient');
@@ -21,7 +25,47 @@ function getApproverInfo(activity) {
 }
 
 /**
+ * Build an "already processed" card when the device request was handled elsewhere
+ */
+function buildAlreadyProcessedCard(username, deviceId) {
+  return {
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      {
+        type: 'Container',
+        style: 'warning',
+        items: [
+          {
+            type: 'TextBlock',
+            text: 'Request Already Processed',
+            weight: 'Bolder',
+            size: 'Medium',
+          },
+        ],
+      },
+      {
+        type: 'TextBlock',
+        text: 'This device approval request for **' + username + '** has already been processed by another admin or has expired.',
+        wrap: true,
+        spacing: 'Medium',
+      },
+      {
+        type: 'FactSet',
+        facts: [
+          { title: 'Device ID', value: deviceId },
+          { title: 'Status', value: 'Already Processed' },
+        ],
+        spacing: 'Medium',
+      },
+    ],
+  };
+}
+
+/**
  * Handle approval of a device request
+ * Returns Adaptive Card for in-place update
  */
 async function handleDeviceApproval(context, data) {
   const approver = getApproverInfo(context.activity);
@@ -30,39 +74,61 @@ async function handleDeviceApproval(context, data) {
   const username = data.username || 'Unknown User';
   
   if (!deviceId) {
-    await context.send('❌ Error: Missing device ID');
-    return;
+    // Return error card for in-place update
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [{
+        type: 'TextBlock',
+        text: 'Error: Missing device ID',
+        color: 'Attention',
+      }],
+    };
   }
   
-  await context.send('🔄 Approving device...');
+  console.log('[Device Handler] Approving device:', deviceId);
   
   const result = await keeperClient.approveDevice(deviceId);
   
   if (result.success) {
-    const approvedCard = cards.buildDeviceApprovedCard(
+    // Return approved card for in-place update
+    return cards.buildDeviceApprovedCard(
       approver.name,
       deviceName,
-      username
+      username,
+      deviceId
     );
-    
-    await context.send({
-      type: 'message',
-      attachments: [{
-        contentType: 'application/vnd.microsoft.card.adaptive',
-        content: approvedCard,
-      }],
-    });
-    
-    await context.send('✅ Device approved for **' + username + '**');
-  } else if (result.alreadyHandled) {
-    await context.send('⚠️ This device request was already processed.');
+  } else if (result.already_processed) {
+    // Return "already processed" card (like Slack does)
+    console.log('[Device Handler] Device already processed:', deviceId);
+    return buildAlreadyProcessedCard(username, deviceId);
   } else {
-    await context.send('❌ Failed to approve device: ' + result.error);
+    // Return error card
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [
+        {
+          type: 'TextBlock',
+          text: 'Failed to Approve Device',
+          weight: 'Bolder',
+          color: 'Attention',
+        },
+        {
+          type: 'TextBlock',
+          text: result.error || 'Unknown error',
+          wrap: true,
+        },
+      ],
+    };
   }
 }
 
 /**
  * Handle denial of a device request
+ * Returns Adaptive Card for in-place update
  */
 async function handleDeviceDenial(context, data) {
   const approver = getApproverInfo(context.activity);
@@ -71,54 +137,74 @@ async function handleDeviceDenial(context, data) {
   const username = data.username || 'Unknown User';
   
   if (!deviceId) {
-    await context.send('❌ Error: Missing device ID');
-    return;
+    // Return error card for in-place update
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [{
+        type: 'TextBlock',
+        text: 'Error: Missing device ID',
+        color: 'Attention',
+      }],
+    };
   }
   
-  await context.send('🔄 Denying device...');
+  console.log('[Device Handler] Denying device:', deviceId);
   
   const result = await keeperClient.denyDevice(deviceId);
   
   if (result.success) {
-    const deniedCard = cards.buildDeviceDeniedCard(
+    // Return denied card for in-place update
+    return cards.buildDeviceDeniedCard(
       approver.name,
       deviceName,
-      username
+      username,
+      deviceId
     );
-    
-    await context.send({
-      type: 'message',
-      attachments: [{
-        contentType: 'application/vnd.microsoft.card.adaptive',
-        content: deniedCard,
-      }],
-    });
-    
-    await context.send('❌ Device denied for **' + username + '**');
-  } else if (result.alreadyHandled) {
-    await context.send('⚠️ This device request was already processed.');
+  } else if (result.already_processed) {
+    // Return "already processed" card (like Slack does)
+    console.log('[Device Handler] Device already processed:', deviceId);
+    return buildAlreadyProcessedCard(username, deviceId);
   } else {
-    await context.send('❌ Failed to deny device: ' + result.error);
+    // Return error card
+    return {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.4',
+      body: [
+        {
+          type: 'TextBlock',
+          text: 'Failed to Deny Device',
+          weight: 'Bolder',
+          color: 'Attention',
+        },
+        {
+          type: 'TextBlock',
+          text: result.error || 'Unknown error',
+          wrap: true,
+        },
+      ],
+    };
   }
 }
 
 /**
  * Route device card action to appropriate handler
+ * Returns an Adaptive Card for in-place update (or null if action not handled)
  */
 async function routeDeviceAction(context, data) {
   const action = data.action;
   
   switch (action) {
     case 'approve_device':
-      await handleDeviceApproval(context, data);
-      return true;
+      return await handleDeviceApproval(context, data);
       
     case 'deny_device':
-      await handleDeviceDenial(context, data);
-      return true;
+      return await handleDeviceDenial(context, data);
       
     default:
-      return false;
+      return null;
   }
 }
 

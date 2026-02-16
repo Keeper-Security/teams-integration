@@ -602,11 +602,24 @@ class KeeperClient {
       if (result?.status === 'success') {
         const message = result.message || '';
         if (typeof message === 'string' && message.toLowerCase().includes('no pending devices')) {
-          return { success: false, alreadyHandled: true, error: 'Device request was already processed' };
+          return { success: false, already_processed: true, error: 'Device request was already processed' };
         }
         return { success: true };
       } else {
-        return { success: false, error: result?.message || 'Failed to approve device' };
+        const errorMsg = this._formatError(result?.message) || 'Failed to approve device';
+        
+        // Check if this is the "already processed" error (like Slack does)
+        if (errorMsg.includes('no pending') || 
+            errorMsg.includes('not found') ||
+            errorMsg.includes('already')) {
+          return { 
+            success: false, 
+            error: errorMsg,
+            already_processed: true 
+          };
+        }
+        
+        return { success: false, error: errorMsg };
       }
     } catch (error) {
       return { success: false, error: error.message };
@@ -621,11 +634,24 @@ class KeeperClient {
       if (result?.status === 'success') {
         const message = result.message || '';
         if (typeof message === 'string' && message.toLowerCase().includes('no pending devices')) {
-          return { success: false, alreadyHandled: true, error: 'Device request was already processed' };
+          return { success: false, already_processed: true, error: 'Device request was already processed' };
         }
         return { success: true };
       } else {
-        return { success: false, error: result?.message || 'Failed to deny device' };
+        const errorMsg = this._formatError(result?.message) || 'Failed to deny device';
+        
+        // Check if this is the "already processed" error (like Slack does)
+        if (errorMsg.includes('no pending') || 
+            errorMsg.includes('not found') ||
+            errorMsg.includes('already')) {
+          return { 
+            success: false, 
+            error: errorMsg,
+            already_processed: true 
+          };
+        }
+        
+        return { success: false, error: errorMsg };
       }
     } catch (error) {
       return { success: false, error: error.message };

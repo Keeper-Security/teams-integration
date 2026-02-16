@@ -18,8 +18,6 @@ function buildDeviceApprovalCard({
   location,
   created,
 }) {
-  const icon = getDeviceIcon(deviceType);
-  
   const facts = [
     { title: 'User', value: username || email || 'Unknown' },
   ];
@@ -57,24 +55,8 @@ function buildDeviceApprovalCard({
         type: 'Container',
         style: 'emphasis',
         items: [
-          {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [{ type: 'TextBlock', text: icon, size: 'ExtraLarge' }],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  { type: 'TextBlock', text: 'Device Approval Request', weight: 'Bolder', size: 'Large', color: 'Accent' },
-                  { type: 'TextBlock', text: 'ID: ' + deviceId, size: 'Small', isSubtle: true },
-                ],
-              },
-            ],
-          },
+          { type: 'TextBlock', text: 'Device Approval Request', weight: 'Bolder', size: 'Large', color: 'Accent' },
+          { type: 'TextBlock', text: 'ID: ' + deviceId, size: 'Small', isSubtle: true },
         ],
       },
       {
@@ -88,7 +70,7 @@ function buildDeviceApprovalCard({
         items: [
           { 
             type: 'TextBlock', 
-            text: '⚠️ Only approve this device if you recognize the user and expect them to be logging in from this device.', 
+            text: 'Only approve this device if you recognize the user and expect them to be logging in from this device.', 
             wrap: true, 
             size: 'Small', 
             isSubtle: true 
@@ -98,9 +80,10 @@ function buildDeviceApprovalCard({
     ],
     actions: [
       {
-        type: 'Action.Submit',
-        title: '✅ Approve',
+        type: 'Action.Execute',
+        title: 'Approve',
         style: 'positive',
+        verb: 'approve_device',
         data: {
           action: 'approve_device',
           deviceId: deviceId,
@@ -109,9 +92,10 @@ function buildDeviceApprovalCard({
         },
       },
       {
-        type: 'Action.Submit',
-        title: '❌ Deny',
+        type: 'Action.Execute',
+        title: 'Deny',
         style: 'destructive',
+        verb: 'deny_device',
         data: {
           action: 'deny_device',
           deviceId: deviceId,
@@ -125,8 +109,22 @@ function buildDeviceApprovalCard({
 
 /**
  * Build an Adaptive Card showing device was approved
+ * Updated to include deviceId (matching EPM pattern)
  */
-function buildDeviceApprovedCard(approverName, deviceName, username) {
+function buildDeviceApprovedCard(approverName, deviceName, username, deviceId) {
+  const facts = [
+    { title: 'User', value: username },
+    { title: 'Approved by', value: approverName },
+  ];
+  
+  if (deviceId) {
+    facts.push({ title: 'Device ID', value: deviceId });
+  }
+  
+  if (deviceName) {
+    facts.push({ title: 'Device', value: deviceName });
+  }
+  
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -136,36 +134,13 @@ function buildDeviceApprovedCard(approverName, deviceName, username) {
         type: 'Container',
         style: 'good',
         items: [
-          {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [{ type: 'TextBlock', text: '✅', size: 'Large' }],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  { type: 'TextBlock', text: 'Device Approved', weight: 'Bolder', size: 'Medium', color: 'Good' },
-                ],
-              },
-            ],
-          },
+          { type: 'TextBlock', text: 'Device Approved', weight: 'Bolder', size: 'Medium', color: 'Good' },
         ],
       },
       {
         type: 'Container',
         items: [
-          {
-            type: 'FactSet',
-            facts: [
-              { title: 'User', value: username },
-              ...(deviceName ? [{ title: 'Device', value: deviceName }] : []),
-              { title: 'Approved by', value: approverName },
-            ],
-          },
+          { type: 'FactSet', facts: facts },
         ],
       },
     ],
@@ -174,8 +149,22 @@ function buildDeviceApprovedCard(approverName, deviceName, username) {
 
 /**
  * Build an Adaptive Card showing device was denied
+ * Updated to include deviceId (matching EPM pattern)
  */
-function buildDeviceDeniedCard(approverName, deviceName, username) {
+function buildDeviceDeniedCard(approverName, deviceName, username, deviceId) {
+  const facts = [
+    { title: 'User', value: username },
+    { title: 'Denied by', value: approverName },
+  ];
+  
+  if (deviceId) {
+    facts.push({ title: 'Device ID', value: deviceId });
+  }
+  
+  if (deviceName) {
+    facts.push({ title: 'Device', value: deviceName });
+  }
+  
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -185,57 +174,17 @@ function buildDeviceDeniedCard(approverName, deviceName, username) {
         type: 'Container',
         style: 'attention',
         items: [
-          {
-            type: 'ColumnSet',
-            columns: [
-              {
-                type: 'Column',
-                width: 'auto',
-                items: [{ type: 'TextBlock', text: '❌', size: 'Large' }],
-              },
-              {
-                type: 'Column',
-                width: 'stretch',
-                items: [
-                  { type: 'TextBlock', text: 'Device Denied', weight: 'Bolder', size: 'Medium', color: 'Attention' },
-                ],
-              },
-            ],
-          },
+          { type: 'TextBlock', text: 'Device Denied', weight: 'Bolder', size: 'Medium', color: 'Attention' },
         ],
       },
       {
         type: 'Container',
         items: [
-          {
-            type: 'FactSet',
-            facts: [
-              { title: 'User', value: username },
-              ...(deviceName ? [{ title: 'Device', value: deviceName }] : []),
-              { title: 'Denied by', value: approverName },
-            ],
-          },
+          { type: 'FactSet', facts: facts },
         ],
       },
     ],
   };
-}
-
-function getDeviceIcon(deviceType) {
-  const type = (deviceType || '').toLowerCase();
-  if (type.includes('mobile') || type.includes('phone') || type.includes('ios') || type.includes('android')) {
-    return '📱';
-  }
-  if (type.includes('tablet') || type.includes('ipad')) {
-    return '📱';
-  }
-  if (type.includes('mac') || type.includes('windows') || type.includes('linux') || type.includes('desktop')) {
-    return '💻';
-  }
-  if (type.includes('browser') || type.includes('web')) {
-    return '🌐';
-  }
-  return '📱';
 }
 
 function formatDate(dateStr) {

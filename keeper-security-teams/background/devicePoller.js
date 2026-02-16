@@ -118,7 +118,7 @@ class DevicePoller {
       
       const sent = await channelService.sendApprovalCard(
         card,
-        `📱 **Device Approval Request** - ${deviceName} (${userEmail})`
+        `**Device Approval Request** - ${deviceName} (${userEmail})`
       );
       
       if (sent) {
