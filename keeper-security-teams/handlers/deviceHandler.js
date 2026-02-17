@@ -5,7 +5,7 @@
  * - Approve device
  * - Deny device
  * 
- * Features (matching Slack implementation):
+ * Features:
  * - In-place card updates (not new messages)
  * - Already processed request handling
  */
@@ -100,7 +100,7 @@ async function handleDeviceApproval(context, data) {
       deviceId
     );
   } else if (result.already_processed) {
-    // Return "already processed" card (like Slack does)
+    // Return "already processed" card
     console.log('[Device Handler] Device already processed:', deviceId);
     return buildAlreadyProcessedCard(username, deviceId);
   } else {
@@ -163,7 +163,7 @@ async function handleDeviceDenial(context, data) {
       deviceId
     );
   } else if (result.already_processed) {
-    // Return "already processed" card (like Slack does)
+    // Return "already processed" card
     console.log('[Device Handler] Device already processed:', deviceId);
     return buildAlreadyProcessedCard(username, deviceId);
   } else {

@@ -12,7 +12,7 @@ const config = require('../config');
 
 /**
  * Parse PEDM request data from API response
- * Extracts fields from account_info and application_info arrays (like Slack does)
+ * Extracts fields from account_info and application_info arrays
  * 
  * @param {Object} data - Raw PEDM request data from API
  * @returns {Object} - Parsed PEDM request with flat properties
@@ -150,7 +150,7 @@ class PedmPoller {
    * Post a PEDM approval card to the approvals channel
    */
   async postApprovalCard(rawRequest) {
-    // Parse the request to extract fields from arrays (like Slack does)
+    // Parse the request to extract fields from arrays
     const request = parsePedmRequest(rawRequest);
     
     console.log('[PEDM Poller] Posting card for: ' + request.approvalUid);

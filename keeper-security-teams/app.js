@@ -785,7 +785,7 @@ app.on("invoke", async (context) => {
         
         // Check if this is a PEDM/EPM action
         if (action.includes('pedm')) {
-          // EPM actions return a card directly for in-place update (like Slack does)
+          // EPM actions return a card directly for in-place update
           const resultCard = await handlers.routePedmAction(context, data);
           if (resultCard) {
             console.log(`[Keeper Bot] EPM action ${action} completed, updating card in-place`);
@@ -800,7 +800,7 @@ app.on("invoke", async (context) => {
         
         // Check if this is a Device Approval action
         if (action.includes('device')) {
-          // Device actions return a card directly for in-place update (like Slack does)
+          // Device actions return a card directly for in-place update
           const resultCard = await handlers.routeDeviceAction(context, data);
           if (resultCard) {
             console.log(`[Keeper Bot] Device action ${action} completed, updating card in-place`);
@@ -921,7 +921,7 @@ app.on("cardAction", async (context) => {
         await handlers.routeApprovalAction(context, data);
         console.log(`[Keeper Bot] Action ${action} completed`);
       } else if (action.includes('pedm')) {
-        // EPM actions return a card for in-place update (like Slack does)
+        // EPM actions return a card for in-place update
         const resultCard = await handlers.routePedmAction(context, data);
         if (resultCard) {
           console.log(`[Keeper Bot] EPM action ${action} completed, updating card in-place`);
@@ -933,7 +933,7 @@ app.on("cardAction", async (context) => {
           };
         }
       } else if (action.includes('device')) {
-        // Device actions return a card for in-place update (like Slack does)
+        // Device actions return a card for in-place update
         const resultCard = await handlers.routeDeviceAction(context, data);
         if (resultCard) {
           console.log(`[Keeper Bot] Device action ${action} completed, updating card in-place`);

@@ -176,7 +176,7 @@ async function handleRequestRecord(context, argsText) {
     identifier: uid, // Always pass the original identifier
   });
   
-  // Try to send to approvals channel (like Slack does)
+  // Try to send to approvals channel
   const channelService = getChannelService();
   let sentToChannel = false;
   
@@ -293,7 +293,7 @@ async function handleRequestFolder(context, argsText) {
     identifier: uid, // Always pass the original identifier
   });
   
-  // Try to send to approvals channel (like Slack does)
+  // Try to send to approvals channel
   const channelService = getChannelService();
   let sentToChannel = false;
   

@@ -7,7 +7,7 @@
 
 /**
  * Build an Adaptive Card for PEDM elevation request
- * Matches Slack implementation with all fields including agentUid
+ * Includes all fields including agentUid
  */
 function buildPedmApprovalCard({
   approvalUid,
@@ -29,7 +29,7 @@ function buildPedmApprovalCard({
     { title: 'Type', value: approvalType || 'Unknown' },
   ];
   
-  // Add Agent UID (like Slack displays)
+  // Add Agent UID if available
   if (agentUid) {
     facts.push({ title: 'Agent UID', value: agentUid });
   }
@@ -124,7 +124,7 @@ function buildPedmApprovalCard({
 
 /**
  * Build an Adaptive Card showing PEDM request was approved
- * Updated to include approvalUid and agentUid (matching Slack)
+ * Updated to include approvalUid and agentUid
  */
 function buildPedmApprovedCard(approverName, username, command, approvalUid, agentUid) {
   const facts = [
@@ -168,7 +168,7 @@ function buildPedmApprovedCard(approverName, username, command, approvalUid, age
 
 /**
  * Build an Adaptive Card showing PEDM request was denied
- * Updated to include approvalUid and agentUid (matching Slack)
+ * Updated to include approvalUid and agentUid
  */
 function buildPedmDeniedCard(approverName, username, command, approvalUid, agentUid) {
   const facts = [

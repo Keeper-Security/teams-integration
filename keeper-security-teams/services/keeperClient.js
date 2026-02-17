@@ -523,7 +523,7 @@ class KeeperClient {
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to approve PEDM request';
         
-        // Check if this is the "already processed" error (like Slack does)
+        // Check if this is an "already processed" error
         if (errorMsg.includes('does not exist or cannot be modified') || 
             errorMsg.includes('Approval request does not exist') ||
             errorMsg.includes('not found') ||
@@ -552,7 +552,7 @@ class KeeperClient {
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to deny PEDM request';
         
-        // Check if this is the "already processed" error (like Slack does)
+        // Check if this is an "already processed" error
         if (errorMsg.includes('does not exist or cannot be modified') || 
             errorMsg.includes('Approval request does not exist') ||
             errorMsg.includes('not found') ||
@@ -608,7 +608,7 @@ class KeeperClient {
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to approve device';
         
-        // Check if this is the "already processed" error (like Slack does)
+        // Check if this is an "already processed" error
         if (errorMsg.includes('no pending') || 
             errorMsg.includes('not found') ||
             errorMsg.includes('already')) {
@@ -640,7 +640,7 @@ class KeeperClient {
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to deny device';
         
-        // Check if this is the "already processed" error (like Slack does)
+        // Check if this is an "already processed" error
         if (errorMsg.includes('no pending') || 
             errorMsg.includes('not found') ||
             errorMsg.includes('already')) {

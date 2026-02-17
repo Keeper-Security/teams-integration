@@ -56,7 +56,7 @@ const DURATION_OPTIONS = [
 
 /**
  * Record permissions that are permanent-only (no duration support)
- * Like Slack, these permissions don't support time limits
+ * Note: These permissions don't support time limits
  */
 const PERMANENT_ONLY_RECORD_PERMISSIONS = ['can_share', 'edit_and_share', 'change_owner'];
 
@@ -283,7 +283,7 @@ async function handleTaskSubmit(context, activity) {
 }
 
 /**
- * Build search modal - Slack-style UI layout
+ * Build search modal UI layout
  * IMPORTANT: Keep structure flat and simple for button compatibility
  * @param {string} searchType - 'record' or 'folder'
  */

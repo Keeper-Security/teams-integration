@@ -4,7 +4,7 @@
  * Handles proactive messaging to Teams channels.
  * Manages conversation references for sending approval cards to dedicated channels.
  * 
- * Similar to Slack's approach of posting to approvals_channel_id,
+ * Posts approval cards to the configured approvals channel.
  * this service routes approval requests to a dedicated Teams channel.
  */
 
