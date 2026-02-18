@@ -33,25 +33,6 @@ function buildFolderApprovalCard({
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.4',
-    refresh: {
-      action: {
-        type: 'Action.Execute',
-        verb: 'refreshApprovalCard',
-        data: {
-          approvalId,
-          type: 'folder',
-          requesterId,
-          requesterEmail,
-          requesterName,
-          folderName,
-          folderUid,
-          justification,
-          identifier,
-          isUid,
-        },
-      },
-      userIds: [],
-    },
     body: [
       { type: 'TextBlock', text: 'Folder Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
@@ -86,6 +67,28 @@ function buildFolderApprovalCard({
   };
   
   if (isUid) {
+    // Add refresh property only when UID is resolved (not in search mode)
+    // This prevents input field values from resetting during action execution
+    card.refresh = {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshApprovalCard',
+        data: {
+          approvalId,
+          type: 'folder',
+          requesterId,
+          requesterEmail,
+          requesterName,
+          folderName,
+          folderUid,
+          justification,
+          identifier,
+          isUid,
+        },
+      },
+      userIds: [],
+    };
+    
     // Add Folder Details section when UID is resolved
     if (folderName && folderName !== identifier) {
       card.body.push({
@@ -104,7 +107,8 @@ function buildFolderApprovalCard({
       { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: DURATION_OPTIONS }
+      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: DURATION_OPTIONS },
+      { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
     );
     
     card.actions = [
@@ -128,13 +132,13 @@ function buildFolderApprovalCard({
     card.body.push(
       { type: 'TextBlock', text: '**Action Required:** Search for the correct folder', wrap: true, size: 'Medium', spacing: 'Large' },
       { type: 'Input.Text', id: 'searchQuery', placeholder: 'Enter folder name or UID to search...', value: identifier || folderName || '' },
-      { type: 'TextBlock', text: 'Enter a search term and click Look Up to find the folder.', wrap: true, isSubtle: true, size: 'Small' }
+      { type: 'TextBlock', text: 'Enter a search term and click Search to find the folder.', wrap: true, isSubtle: true, size: 'Small' }
     );
     
     card.actions = [
       {
         type: 'Action.Execute',
-        title: '🔍 Look Up',
+        title: '🔍 Search',
         style: 'positive',
         verb: 'lookup_folder',
         data: { action: 'lookup_folder', approvalId, identifier: identifier || folderName, folderName, requesterId, requesterEmail, requesterAadObjectId, requesterName, justification },
@@ -184,7 +188,7 @@ function buildFolderSearchResultsCard({
     card.body.push(...buildNoResultsSection(searchQuery, 'folder'));
     
     card.actions = [
-      { type: 'Action.Execute', title: '🔍 Look Up', style: 'positive', verb: 'lookup_folder', data: { action: 'lookup_folder', ...baseData, folderName: originalFolderName } },
+      { type: 'Action.Execute', title: '🔍 Search', style: 'positive', verb: 'lookup_folder', data: { action: 'lookup_folder', ...baseData, folderName: originalFolderName } },
       { type: 'Action.Execute', title: 'Reset', verb: 'reset_folder_card', data: { action: 'reset_folder_card', ...baseData, folderName: originalFolderName } },
       { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_folder', data: { action: 'deny_folder', approvalId, folderUid: null, folderName: originalFolderName, requesterId, requesterEmail, requesterName, justification } },
     ];
@@ -199,7 +203,8 @@ function buildFolderSearchResultsCard({
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
       
       card.actions = [
@@ -216,7 +221,8 @@ function buildFolderSearchResultsCard({
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
       
       card.actions = [
@@ -432,9 +438,124 @@ function buildFolderConfirmationCard({
   };
 }
 
+/**
+ * Build a card for when share invitation is sent (user doesn't have Keeper account yet)
+ */
+function buildFolderInvitationSentCard({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  folderName,
+  folderUid,
+  justification,
+  permission,
+  approverName,
+  processedTime,
+}) {
+  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { 
+        type: 'TextBlock', 
+        text: 'Share Invitation Sent', 
+        weight: 'Bolder', 
+        size: 'ExtraLarge',
+        color: 'Warning'
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: requesterName || 'Unknown', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Folder:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: folderName || folderUid || 'Unknown', color: 'Warning', size: 'Medium' },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: approvalId || 'N/A', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: formatFolderPermissionLabel(permission) || 'No Permissions', size: 'Medium' },
+            ],
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        style: 'warning',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: 'INVITATION SENT', 
+            weight: 'Bolder', 
+            size: 'Large', 
+            horizontalAlignment: 'Center' 
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: 'Share invitation has been sent to the user\'s email.', 
+            wrap: true,
+            weight: 'Bolder'
+          },
+          { 
+            type: 'TextBlock', 
+            text: 'They must accept the invitation and create a Keeper account to access this folder.',
+            wrap: true,
+            isSubtle: true
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        style: 'emphasis',
+        items: [
+          { type: 'TextBlock', text: 'Next Steps for Requester:', weight: 'Bolder', size: 'Small' },
+          { type: 'TextBlock', text: '1. Check email for the Keeper invitation', size: 'Small', wrap: true },
+          { type: 'TextBlock', text: '2. Accept the invitation and create a Keeper account', size: 'Small', wrap: true },
+          { type: 'TextBlock', text: '3. The folder will be automatically shared with them', size: 'Small', wrap: true },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: `Approved by: ${approverName || 'Unknown'} at ${time}`, 
+            size: 'Small', 
+            isSubtle: true,
+            horizontalAlignment: 'Right'
+          },
+        ],
+      },
+    ],
+    actions: [],
+  };
+}
+
 module.exports = {
   buildFolderApprovalCard,
   buildFolderSearchResultsCard,
   buildFolderApprovalCardWithStatus,
   buildFolderConfirmationCard,
+  buildFolderInvitationSentCard,
 };

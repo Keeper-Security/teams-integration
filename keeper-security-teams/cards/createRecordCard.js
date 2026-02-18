@@ -151,7 +151,7 @@ function buildCreateRecordSuccessResponse(params) {
   return {
     task: {
       type: 'message',
-      value: `✅ Record "${title}" created successfully!\n\nUID: ${recordUid}\n\nPlease search for this record to approve access.`,
+      value: `Record "${title}" created successfully!\n\nUID: ${recordUid}\n\nPlease search for this record to approve access.`,
     },
   };
 }

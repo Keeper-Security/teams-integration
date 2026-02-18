@@ -32,25 +32,6 @@ function buildRecordApprovalCard({
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.4',
-    refresh: {
-      action: {
-        type: 'Action.Execute',
-        verb: 'refreshApprovalCard',
-        data: {
-          approvalId,
-          type: 'record',
-          requesterId,
-          requesterEmail,
-          requesterName,
-          recordTitle,
-          recordUid,
-          justification,
-          identifier,
-          isUid,
-        },
-      },
-      userIds: [],
-    },
     body: [
       { type: 'TextBlock', text: 'Record Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
@@ -85,6 +66,28 @@ function buildRecordApprovalCard({
   };
   
   if (isUid) {
+    // Add refresh property only when UID is resolved (not in search mode)
+    // This prevents input field values from resetting during action execution
+    card.refresh = {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshApprovalCard',
+        data: {
+          approvalId,
+          type: 'record',
+          requesterId,
+          requesterEmail,
+          requesterName,
+          recordTitle,
+          recordUid,
+          justification,
+          identifier,
+          isUid,
+        },
+      },
+      userIds: [],
+    };
+    
     // Add Record Details section when UID is resolved
     if (recordTitle && recordTitle !== identifier) {
       card.body.push({
@@ -103,7 +106,8 @@ function buildRecordApprovalCard({
       { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: DURATION_OPTIONS }
+      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: DURATION_OPTIONS },
+      { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
     );
     
     card.actions = [
@@ -127,7 +131,7 @@ function buildRecordApprovalCard({
     card.body.push(
       { type: 'TextBlock', text: '**Action Required:** Search for the correct record', wrap: true, size: 'Medium', spacing: 'Large' },
       { type: 'Input.Text', id: 'searchQuery', placeholder: 'Enter record name or UID to search...', value: identifier || recordTitle || '' },
-      { type: 'TextBlock', text: 'Enter a search term and click Look Up to find the record.', wrap: true, isSubtle: true, size: 'Small' }
+      { type: 'TextBlock', text: 'Enter a search term and click Search to find the record.', wrap: true, isSubtle: true, size: 'Small' }
     );
     
     card.actions = [
@@ -225,7 +229,8 @@ function buildRecordSearchResultsCard({
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
       
       card.actions = [
@@ -247,7 +252,8 @@ function buildRecordSearchResultsCard({
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
       
       card.actions = [
@@ -622,6 +628,7 @@ function buildRecordCreatedCard({
       { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+      { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' },
     ],
     actions: [
       {
@@ -660,6 +667,120 @@ function buildRecordCreatedCard({
   };
 }
 
+/**
+ * Build a card for when share invitation is sent (user doesn't have Keeper account yet)
+ */
+function buildRecordInvitationSentCard({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  recordTitle,
+  recordUid,
+  justification,
+  permission,
+  approverName,
+  processedTime,
+}) {
+  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { 
+        type: 'TextBlock', 
+        text: 'Share Invitation Sent', 
+        weight: 'Bolder', 
+        size: 'ExtraLarge',
+        color: 'Warning'
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: requesterName || 'Unknown', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Record:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: recordTitle || recordUid || 'Unknown', color: 'Warning', size: 'Medium' },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: approvalId || 'N/A', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: formatPermissionLabel(permission) || 'View Only', size: 'Medium' },
+            ],
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        style: 'warning',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: 'INVITATION SENT', 
+            weight: 'Bolder', 
+            size: 'Large', 
+            horizontalAlignment: 'Center' 
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: 'Share invitation has been sent to the user\'s email.', 
+            wrap: true,
+            weight: 'Bolder'
+          },
+          { 
+            type: 'TextBlock', 
+            text: 'They must accept the invitation and create a Keeper account to access this record.',
+            wrap: true,
+            isSubtle: true
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        style: 'emphasis',
+        items: [
+          { type: 'TextBlock', text: 'Next Steps for Requester:', weight: 'Bolder', size: 'Small' },
+          { type: 'TextBlock', text: '1. Check email for the Keeper invitation', size: 'Small', wrap: true },
+          { type: 'TextBlock', text: '2. Accept the invitation and create a Keeper account', size: 'Small', wrap: true },
+          { type: 'TextBlock', text: '3. The record will be automatically shared with them', size: 'Small', wrap: true },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: `Approved by: ${approverName || 'Unknown'} at ${time}`, 
+            size: 'Small', 
+            isSubtle: true,
+            horizontalAlignment: 'Right'
+          },
+        ],
+      },
+    ],
+    actions: [],
+  };
+}
+
 module.exports = {
   buildRecordApprovalCard,
   buildRecordSearchResultsCard,
@@ -667,4 +788,5 @@ module.exports = {
   buildRecordConfirmationCard,
   buildRecordCreationCard,
   buildRecordCreatedCard,
+  buildRecordInvitationSentCard,
 };

@@ -12,6 +12,9 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
+const { createLogger } = require('../services');
+
+const log = createLogger('DeviceHandler');
 
 /**
  * Get approver info from activity
@@ -87,7 +90,7 @@ async function handleDeviceApproval(context, data) {
     };
   }
   
-  console.log('[Device Handler] Approving device:', deviceId);
+  log.debug('Approving device', deviceId);
   
   const result = await keeperClient.approveDevice(deviceId);
   
@@ -101,7 +104,7 @@ async function handleDeviceApproval(context, data) {
     );
   } else if (result.already_processed) {
     // Return "already processed" card
-    console.log('[Device Handler] Device already processed:', deviceId);
+    log.debug('Device already processed', deviceId);
     return buildAlreadyProcessedCard(username, deviceId);
   } else {
     // Return error card
@@ -150,7 +153,7 @@ async function handleDeviceDenial(context, data) {
     };
   }
   
-  console.log('[Device Handler] Denying device:', deviceId);
+  log.debug('Denying device', deviceId);
   
   const result = await keeperClient.denyDevice(deviceId);
   
@@ -164,7 +167,7 @@ async function handleDeviceDenial(context, data) {
     );
   } else if (result.already_processed) {
     // Return "already processed" card
-    console.log('[Device Handler] Device already processed:', deviceId);
+    log.debug('Device already processed', deviceId);
     return buildAlreadyProcessedCard(username, deviceId);
   } else {
     // Return error card

@@ -6,9 +6,11 @@
  */
 
 const keeperClient = require('../services/keeperClient');
-const { getChannelService } = require('../services');
+const { getChannelService, createLogger } = require('../services');
 const cards = require('../cards');
 const config = require('../config');
+
+const log = createLogger('DevicePoller');
 
 class DevicePoller {
   constructor(teamsApp) {
@@ -26,11 +28,11 @@ class DevicePoller {
    */
   start() {
     if (!this.enabled) {
-      console.log('[Device Poller] Disabled in config');
+      log.info('Disabled in config');
       return;
     }
 
-    console.log('[Device Poller] Starting with interval: ' + this.interval + 'ms');
+    log.info(`Starting with interval: ${this.interval}ms`);
     
     // Run immediately on start
     this.poll();
@@ -49,7 +51,7 @@ class DevicePoller {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      console.log('[Device Poller] Stopped');
+      log.info('Stopped');
     }
   }
 
@@ -57,28 +59,28 @@ class DevicePoller {
    * Poll for pending device approval requests
    */
   async poll() {
-    console.log('[Device Poller] Polling for pending device approvals...');
+    log.debug('Polling for pending device approvals...');
     
     try {
       const devices = await keeperClient.getPendingDeviceApprovals();
       
       if (!devices || devices.length === 0) {
-        console.log('[Device Poller] No pending device approvals');
+        log.debug('No pending device approvals');
         return;
       }
       
-      console.log('[Device Poller] Found ' + devices.length + ' pending devices');
+      log.debug(`Found ${devices.length} pending devices`);
       
       for (const device of devices) {
         const deviceId = device.device_id || device.deviceId || device.id;
         
         if (!deviceId) {
-          console.log('[Device Poller] Skipping device without ID');
+          log.debug('Skipping device without ID');
           continue;
         }
         
         if (this.processedDevices.has(deviceId)) {
-          console.log('[Device Poller] Already processed: ' + deviceId);
+          log.debug('Already processed', deviceId);
           continue;
         }
         
@@ -86,7 +88,7 @@ class DevicePoller {
         this.processedDevices.set(deviceId, Date.now());
       }
     } catch (error) {
-      console.error('[Device Poller] Error polling:', error.message);
+      log.error('Error polling', error.message);
     }
   }
 
@@ -96,7 +98,7 @@ class DevicePoller {
   async postApprovalCard(device) {
     const deviceId = device.device_id || device.deviceId || device.id;
     
-    console.log('[Device Poller] Posting card for: ' + deviceId);
+    log.debug('Posting card for', deviceId);
     
     const card = cards.buildDeviceApprovalCard({
       deviceId: deviceId,
@@ -122,17 +124,16 @@ class DevicePoller {
       );
       
       if (sent) {
-        console.log('[Device Poller] Card posted to approvals channel: ' + deviceId);
+        log.debug('Card posted to approvals channel', deviceId);
         this.consecutiveErrors = 0;
         return true;
       } else {
-        console.warn('[Device Poller] Failed to post card to channel: ' + deviceId);
+        log.warn('Failed to post card to channel', deviceId);
         this.consecutiveErrors++;
         return false;
       }
     } else {
-      console.warn('[Device Poller] Approvals channel not ready - card not sent');
-      console.warn('[Device Poller] Send a message in the approvals channel to initialize');
+      log.warn('Approvals channel not ready - card not sent');
       return false;
     }
   }
@@ -152,7 +153,7 @@ class DevicePoller {
     }
     
     if (cleaned > 0) {
-      console.log('[Device Poller] Cleaned up ' + cleaned + ' old entries');
+      log.debug(`Cleaned up ${cleaned} old entries`);
     }
   }
 }

@@ -9,11 +9,13 @@
  */
 
 const keeperClient = require('../services/keeperClient');
-const { getChannelService } = require('../services');
+const { getChannelService, createLogger } = require('../services');
 const graphService = require('../services/graphService');
 const cards = require('../cards');
 const config = require('../config');
 const { isUid } = require('../utils/helpers');
+
+const log = createLogger('CommandHandler');
 
 /**
  * Generate a unique approval ID
@@ -95,20 +97,18 @@ async function getUserInfo(activity) {
       const email = await graphService.getUserEmail(aadObjectId);
       if (email) {
         userInfo.userEmail = email;
-        console.log(`[getUserInfo] Fetched email for user ${from.name}: ${email}`);
+        log.debug(`Fetched email for user ${from.name}: ${email}`);
       } else {
-        console.warn(`[getUserInfo] No email found for user ${from.name} (AAD ID: ${aadObjectId})`);
+        log.warn(`No email found for user ${from.name} (AAD ID: ${aadObjectId})`);
       }
     } catch (error) {
-      console.error(`[getUserInfo] Error fetching email for user ${from.name}:`, error.message);
-      // Fallback: check if email is directly in activity (rare, but possible)
+      log.error(`Error fetching email for user ${from.name}`, error.message);
       userInfo.userEmail = from.email || from.userPrincipalName || null;
     }
   } else {
-    // No AAD Object ID available - try fallback fields
     userInfo.userEmail = from.email || from.userPrincipalName || null;
     if (!userInfo.userEmail) {
-      console.warn(`[getUserInfo] No AAD Object ID found for user ${from.name}, cannot fetch email`);
+      log.warn(`No AAD Object ID found for user ${from.name}, cannot fetch email`);
     }
   }
 
@@ -125,12 +125,12 @@ async function handleRequestRecord(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
   if (!uid) {
-    await context.send('❌ **Usage:** `keeper-request-record <record-name> <justification>`\n\nExample: `keeper-request-record AWS-Prod Need for deployment`');
+    await context.send('**Usage:** `keeper-request-record <record-name> <justification>`\n\nExample: `keeper-request-record AWS-Prod Need for deployment`');
     return;
   }
   
   if (!justification) {
-    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `keeper-request-record <record-name> <justification>`');
+    await context.send('Please provide a justification for your access request.\n\n**Usage:** `keeper-request-record <record-name> <justification>`');
     return;
   }
   
@@ -152,7 +152,7 @@ async function handleRequestRecord(context, argsText) {
   // If not found by UID or not a UID format, treat as description
   if (!record && isUidFormat) {
     // UID format but not found - might be invalid
-    await context.send('❌ Record not found: `' + uid + '`\n\nPlease check the UID and try again.');
+    await context.send('Record not found: `' + uid + '`\n\nPlease check the UID and try again.');
     return;
   }
   
@@ -189,18 +189,15 @@ async function handleRequestRecord(context, argsText) {
       const result = await channelService.sendApprovalCardViaConnector(
         approvalCard,
         approvalId,
-        `📋 New record access request from **${userInfo.userName}**`
+        `New record access request from **${userInfo.userName}**`
       );
       sentToChannel = result.success;
       
       if (result.activityId) {
-        console.log(`[CommandHandler] Approval card sent with activityId: ${result.activityId}`);
+        log.debug(`Approval card sent with activityId: ${result.activityId}`);
       }
     } else {
-      console.log('[CommandHandler] Cannot send to approvals channel:', {
-        approvalsReady: status.approvalsChannelReady,
-        appReady: status.appReady
-      });
+      log.debug('Cannot send to approvals channel', { approvalsReady: status.approvalsChannelReady, appReady: status.appReady });
     }
   }
   
@@ -242,12 +239,12 @@ async function handleRequestFolder(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
   if (!uid) {
-    await context.send('❌ **Usage:** `keeper-request-folder <folder-name> <justification>`\n\nExample: `keeper-request-folder "Engineering Creds" Project onboarding`');
+    await context.send('**Usage:** `keeper-request-folder <folder-name> <justification>`\n\nExample: `keeper-request-folder "Engineering Creds" Project onboarding`');
     return;
   }
   
   if (!justification) {
-    await context.send('❌ Please provide a justification for your access request.\n\n**Usage:** `keeper-request-folder <folder-name> <justification>`');
+    await context.send('Please provide a justification for your access request.\n\n**Usage:** `keeper-request-folder <folder-name> <justification>`');
     return;
   }
   
@@ -269,7 +266,7 @@ async function handleRequestFolder(context, argsText) {
   // If not found by UID or not a UID format, treat as description
   if (!folder && isUidFormat) {
     // UID format but not found - might be invalid
-    await context.send('❌ Folder not found: `' + uid + '`\n\nPlease check the UID and try again.');
+    await context.send('Folder not found: `' + uid + '`\n\nPlease check the UID and try again.');
     return;
   }
   
@@ -306,25 +303,19 @@ async function handleRequestFolder(context, argsText) {
       const result = await channelService.sendApprovalCardViaConnector(
         approvalCard,
         approvalId,
-        `📁 New folder access request from **${userInfo.userName}**`
+        `New folder access request from **${userInfo.userName}**`
       );
       sentToChannel = result.success;
       
       if (result.activityId) {
-        console.log(`[CommandHandler] Folder approval card sent with activityId: ${result.activityId}`);
+        log.debug(`Folder approval card sent with activityId: ${result.activityId}`);
       }
     } else {
-      console.log('[CommandHandler] Cannot send to approvals channel:', {
-        approvalsReady: status.approvalsChannelReady,
-        appReady: status.appReady
-      });
+      log.debug('Cannot send to approvals channel', { approvalsReady: status.approvalsChannelReady, appReady: status.appReady });
     }
   }
-  
+
   if (sentToChannel) {
-    // Approval sent to dedicated channel - notify requester
-    // Show the identifier (UID) the user entered, not the resolved name (for security)
-    // Using two spaces before \n for Markdown line breaks
     await context.send(
       '**Folder access request submitted!**  \n' +
       `• **Request ID:** \`${approvalId}\`  \n` +
@@ -438,13 +429,10 @@ async function handleShare(context, argsText) {
         sentToChannel = sendResult.success;
         
         if (sendResult.activityId) {
-          console.log(`[CommandHandler] Share approval card sent with activityId: ${sendResult.activityId}`);
+          log.debug(`Share approval card sent with activityId: ${sendResult.activityId}`);
         }
       } else {
-        console.log('[CommandHandler] Cannot send to approvals channel:', {
-          approvalsReady: status.approvalsChannelReady,
-          appReady: status.appReady
-        });
+        log.debug('Cannot send to approvals channel', { approvalsReady: status.approvalsChannelReady, appReady: status.appReady });
       }
     }
     
@@ -512,16 +500,16 @@ async function handleSearch(context, argsText, searchType = 'record') {
   
   if (!query) {
     const typeLabel = searchType === 'record' ? 'records' : 'folders';
-    await context.send('❌ **Usage:** `search-' + typeLabel + ' <query>`\n\nExample: `search-' + typeLabel + ' production`');
+    await context.send('**Usage:** `search-' + typeLabel + ' <query>`\n\nExample: `search-' + typeLabel + ' production`');
     return;
   }
   
   if (!config.features.enableSearch) {
-    await context.send('❌ Search is not enabled. Contact your administrator.');
+    await context.send('Search is not enabled. Contact your administrator.');
     return;
   }
   
-  await context.send('🔍 Searching...');
+  await context.send('Searching...');
   
   let results;
   if (searchType === 'record') {
@@ -574,19 +562,19 @@ async function handleHelp(context) {
  * @returns {Promise<void>}
  */
 async function handleStatus(context) {
-  await context.send('🔄 Checking Keeper connection...');
+  await context.send('Checking Keeper connection...');
   
   const isHealthy = await keeperClient.healthCheck();
   
   if (isHealthy) {
-    await context.send('✅ **Keeper Status:** Connected\n\n' +
+    await context.send('**Keeper Status:** Connected\n\n' +
       '• Service URL: `' + (config.keeper?.serviceUrl || 'Not configured') + '`\n' +
-      '• EPM Polling: ' + (config.pedm?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
-      '• Device Approval: ' + (config.deviceApproval?.enabled ? '✅ Enabled' : '❌ Disabled') + '\n' +
-      '• Search: ' + (config.features?.enableSearch ? '✅ Enabled' : '❌ Disabled')
+      '• EPM Polling: ' + (config.pedm?.enabled ? 'Enabled' : 'Disabled') + '\n' +
+      '• Device Approval: ' + (config.deviceApproval?.enabled ? 'Enabled' : 'Disabled') + '\n' +
+      '• Search: ' + (config.features?.enableSearch ? 'Enabled' : 'Disabled')
     );
   } else {
-    await context.send('❌ **Keeper Status:** Disconnected\n\n' +
+    await context.send('**Keeper Status:** Disconnected\n\n' +
       'Unable to connect to Keeper Commander Service Mode.\n' +
       'Service URL: `' + (config.keeper?.serviceUrl || 'Not configured') + '`\n\n' +
       'Please check that Keeper Commander is running in Service Mode.'

@@ -10,7 +10,9 @@
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
 const config = require('../config');
-const { getChannelService, getApprovalActivityId, removeApprovalActivityId, getApprovalStatus, storeApprovalStatus } = require('../services');
+const { getChannelService, getApprovalActivityId, removeApprovalActivityId, getApprovalStatus, storeApprovalStatus, createLogger } = require('../services');
+
+const log = createLogger('ApprovalHandler');
 
 /**
  * Duration string to seconds mapping
@@ -32,6 +34,94 @@ const DURATION_MAP = {
  */
 function parseDuration(duration) {
   return DURATION_MAP[duration] ?? 86400; // Default to 24h
+}
+
+/**
+ * Safely format expiry date, handling permanent/never strings
+ * @param {string|null} expiresAt - The expiry date string from API
+ * @returns {string} - Formatted date or 'Access granted indefinitely'
+ */
+function formatExpiryDate(expiresAt) {
+  if (!expiresAt) return 'Access granted indefinitely';
+  
+  // Check for permanent/never strings
+  if (typeof expiresAt === 'string') {
+    const lower = expiresAt.toLowerCase();
+    if (lower.includes('permanent') || lower.includes('never') || lower === 'n/a') {
+      return 'Access granted indefinitely';
+    }
+  }
+  
+  // Try to parse as date
+  const expiryDate = new Date(expiresAt);
+  if (isNaN(expiryDate.getTime())) {
+    return expiresAt; // Return original if not a valid date
+  }
+  
+  return expiryDate.toLocaleString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+/**
+ * Build notification card for requester when share invitation is sent
+ * (user doesn't have Keeper account yet)
+ */
+function buildInvitationNotificationCard({ recordTitle, itemType, permission, approverName }) {
+  const itemLabel = itemType === 'folder' ? 'folder' : 'record';
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { 
+        type: 'TextBlock', 
+        text: 'Share Invitation Sent', 
+        weight: 'Bolder', 
+        size: 'Large',
+        color: 'Warning'
+      },
+      {
+        type: 'TextBlock',
+        text: `Your request for **${itemLabel}** \`${recordTitle}\` has been approved!`,
+        wrap: true,
+        spacing: 'Medium'
+      },
+      {
+        type: 'TextBlock',
+        text: `However, you don't have a Keeper account yet. A share invitation has been sent to your email.`,
+        wrap: true,
+        spacing: 'Small'
+      },
+      {
+        type: 'Container',
+        style: 'emphasis',
+        spacing: 'Medium',
+        items: [
+          { type: 'TextBlock', text: 'Next Steps:', weight: 'Bolder', size: 'Medium' },
+          { type: 'TextBlock', text: '1. Check your email for the Keeper invitation', size: 'Small', wrap: true },
+          { type: 'TextBlock', text: '2. Accept the invitation and create a Keeper account', size: 'Small', wrap: true },
+          { type: 'TextBlock', text: `3. The ${itemLabel} will be automatically shared with you`, size: 'Small', wrap: true },
+        ],
+      },
+      {
+        type: 'FactSet',
+        spacing: 'Medium',
+        facts: [
+          { title: 'Permission:', value: permission || 'View Only' },
+          { title: 'Approved by:', value: approverName || 'Admin' },
+        ],
+      },
+    ],
+    actions: [],
+  };
 }
 
 /**
@@ -63,12 +153,12 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
   let activityId = getApprovalActivityId(approvalId);
   
   if (!activityId && activity.replyToId) {
-    console.log(`[ApprovalHandler] Using replyToId as fallback: ${activity.replyToId}`);
+    log.debug(`Using replyToId as fallback: ${activity.replyToId}`);
     activityId = activity.replyToId;
   }
   
   if (!activityId) {
-    console.log(`[ApprovalHandler] No activity ID found for approval ${approvalId}`);
+    log.debug(`No activity ID found for approval ${approvalId}`);
     throw new Error('No activity ID found for this approval');
   }
 
@@ -85,11 +175,7 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
     throw new Error('Missing conversation ID or service URL from context');
   }
 
-  console.log(`[ApprovalHandler] Updating approval ${approvalId}:`, {
-    activityId,
-    conversationId: conversationId.substring(0, 50) + '...',
-    serviceUrl: serviceUrl.substring(0, 50) + '...',
-  });
+  log.debug(`Updating approval ${approvalId}`, { activityId });
 
   // Build the updated activity
   const updatedActivity = {
@@ -108,11 +194,11 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
   if (typeof context.updateActivity === 'function') {
     try {
       await context.updateActivity(updatedActivity);
-      console.log('[ApprovalHandler] Updated via context.updateActivity');
+      log.debug('Updated via context.updateActivity');
       removeApprovalActivityId(approvalId);
       return true;
     } catch (e) {
-      console.log('[ApprovalHandler] context.updateActivity failed:', e.message);
+      log.debug('context.updateActivity failed', e.message);
     }
   }
 
@@ -129,11 +215,11 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
         updatedActivity
       );
       
-      console.log('[ApprovalHandler] Updated via ApiClient with context serviceUrl');
+      log.debug('Updated via ApiClient with context serviceUrl');
       removeApprovalActivityId(approvalId);
       return true;
     } catch (e) {
-      console.log('[ApprovalHandler] ApiClient update failed:', e.message);
+      log.debug('ApiClient update failed', e.message);
     }
   }
 
@@ -143,11 +229,11 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
       const success = await channelService.updateApprovalCard(activityId, updatedCard);
       if (success) {
         removeApprovalActivityId(approvalId);
-        console.log('[ApprovalHandler] Updated via channelService');
+        log.debug('Updated via channelService');
         return true;
       }
     } catch (e) {
-      console.log('[ApprovalHandler] channelService.updateApprovalCard failed:', e.message);
+      log.debug('channelService.updateApprovalCard failed', e.message);
     }
   }
 
@@ -158,7 +244,7 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
  * Handle approval of a record access request
  */
 async function handleRecordApproval(context, data) {
-  console.log('[ApprovalHandler] handleRecordApproval called with data:', JSON.stringify(data));
+  log.debug('handleRecordApproval called', data);
   
   const approver = getApproverInfo(context.activity);
   const permission = data.permission || 'view_only';
@@ -173,12 +259,12 @@ async function handleRecordApproval(context, data) {
   const justification = data.justification;
   
   if (!recordUid) {
-    await context.send('❌ Error: Missing record UID');
+    await context.send('Error: Missing record UID');
     return;
   }
   
   if (!requesterEmail) {
-    await context.send('❌ Error: Missing requester email. Cannot grant access without email.');
+    await context.send('Error: Missing requester email. Cannot grant access without email.');
     return;
   }
   
@@ -191,41 +277,48 @@ async function handleRecordApproval(context, data) {
   );
   
   if (result.success) {
-    // Format expiry date
-    let expiresAtFormatted = 'Permanent';
-    if (result.expiresAt) {
-      const expiryDate = new Date(result.expiresAt);
-      expiresAtFormatted = expiryDate.toLocaleString('en-US', {
-        month: '2-digit',
-        day: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
+    // Format expiry date using helper function
+    const expiresAtFormatted = formatExpiryDate(result.expiresAt);
+    const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    
+    let updatedCard;
+    
+    if (result.invitationSent) {
+      log.info('Share invitation sent to user (no Keeper account)');
+      
+      // Build invitation sent card
+      updatedCard = cards.buildRecordInvitationSentCard({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        recordTitle: recordTitle,
+        recordUid: recordUid,
+        justification: justification,
+        permission: permission,
+        approverName: approver.name,
+        processedTime: processedTime,
+      });
+    } else {
+      // Build the updated card with APPROVED status and all details
+      updatedCard = cards.buildRecordApprovalCardWithStatus({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        recordTitle: recordTitle,
+        justification: justification,
+        status: 'approved',
+        approverName: approver.name,
+        permission: permission,
+        duration: duration === 'permanent' ? 'Permanent' : duration,
+        expiresAt: expiresAtFormatted,
       });
     }
     
-    // Build the updated card with APPROVED status and all details
-    const updatedCard = cards.buildRecordApprovalCardWithStatus({
-      approvalId: approvalId,
-      requesterName: requesterName,
-      requesterEmail: requesterEmail,
-      recordTitle: recordTitle,
-      justification: justification,
-      status: 'approved',
-      approverName: approver.name,
-      permission: permission,
-      duration: duration === 'permanent' ? 'Permanent' : duration,
-      expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-    });
-    
-    // Try to update the original approval card using stored activity ID
     try {
       await tryUpdateApprovalCard(approvalId, updatedCard, context);
-      console.log('[ApprovalHandler] Successfully updated approval card with APPROVED status');
+      log.debug('Successfully updated approval card with', result.invitationSent ? 'INVITATION SENT' : 'APPROVED', 'status');
     } catch (updateError) {
-      console.log('[ApprovalHandler] Failed to update activity, sending new message:', updateError.message);
+      log.debug('Failed to update activity, sending new message', updateError.message);
       // Fallback: send a new message if update fails
       await context.send({
         type: 'message',
@@ -242,14 +335,27 @@ async function handleRecordApproval(context, data) {
       try {
         const channelService = getChannelService();
         if (channelService) {
-          const notificationCard = cards.buildRequesterNotificationCard({
-            approved: true,
-            recordTitle: recordTitle,
-            permission: permission,
-            duration: duration === 'permanent' ? 'Permanent' : duration,
-            expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-            approverName: approver.name,
-          });
+          let notificationCard;
+          
+          if (result.invitationSent) {
+            // Send invitation notification to requester
+            notificationCard = buildInvitationNotificationCard({
+              recordTitle: recordTitle,
+              itemType: 'record',
+              permission: permission,
+              approverName: approver.name,
+            });
+          } else {
+            // Send regular approval notification
+            notificationCard = cards.buildRequesterNotificationCard({
+              approved: true,
+              recordTitle: recordTitle,
+              permission: permission,
+              duration: duration === 'permanent' ? 'Permanent' : duration,
+              expiresAt: expiresAtFormatted,
+              approverName: approver.name,
+            });
+          }
           
           const notificationSent = await channelService.sendDirectMessage(requesterId, {
             type: 'message',
@@ -260,17 +366,17 @@ async function handleRecordApproval(context, data) {
           });
           
           if (notificationSent) {
-            console.log(`[ApprovalHandler] Sent approval notification to requester: ${requesterId}`);
+            log.debug(`Sent ${result.invitationSent ? 'invitation' : 'approval'} notification to requester: ${requesterId}`);
           } else {
-            console.log(`[ApprovalHandler] Could not send notification to requester (no reference stored)`);
+            log.debug(`Could not send notification to requester (no reference stored)`);
           }
         }
       } catch (notifyError) {
-        console.error('[ApprovalHandler] Error sending requester notification:', notifyError.message);
+        log.error('Error sending requester notification', notifyError.message);
       }
     }
   } else {
-    await context.send('❌ Failed to grant access: ' + result.error);
+    await context.send('Failed to grant access: ' + result.error);
   }
 }
 
@@ -278,7 +384,7 @@ async function handleRecordApproval(context, data) {
  * Handle denial of a record access request
  */
 async function handleRecordDenial(context, data) {
-  console.log('[ApprovalHandler] handleRecordDenial called with data:', JSON.stringify(data));
+  log.debug('handleRecordDenial called', data);
   
   const approver = getApproverInfo(context.activity);
   const recordTitle = data.recordTitle || data.recordUid || 'Unknown Record';
@@ -286,7 +392,7 @@ async function handleRecordDenial(context, data) {
   const approvalId = data.approvalId || 'N/A';
   const justification = data.justification || '';
   
-  console.log('[ApprovalHandler] Denying record access:', { approver: approver.name, recordTitle, requesterName });
+  log.debug('Denying record access', { approver: approver.name, recordTitle, requesterName });
   
   // Build updated card with DENIED status
   const updatedCard = cards.buildRecordApprovalCardWithStatus({
@@ -298,12 +404,11 @@ async function handleRecordDenial(context, data) {
     approverName: approver.name,
   });
   
-  // Try to update the original approval card using stored activity ID
   try {
     await tryUpdateApprovalCard(approvalId, updatedCard, context);
-    console.log('[ApprovalHandler] Updated original card with denied status');
+    log.debug('Updated original card with denied status');
   } catch (error) {
-    console.error('[ApprovalHandler] Failed to update card, sending new message:', error.message);
+    log.debug('Failed to update card, sending new message', error.message);
     // Fallback: send as new message
     await context.send({
       type: 'message',
@@ -336,24 +441,24 @@ async function handleRecordDenial(context, data) {
         });
         
         if (notificationSent) {
-          console.log(`[ApprovalHandler] Sent denial notification to requester: ${requesterId}`);
+          log.debug(`Sent denial notification to requester: ${requesterId}`);
         } else {
-          console.log(`[ApprovalHandler] Could not send notification to requester (no reference stored)`);
+          log.debug(`Could not send notification to requester (no reference stored)`);
         }
       }
     } catch (notifyError) {
-      console.error('[ApprovalHandler] Error sending requester notification:', notifyError.message);
+      log.error('Error sending requester notification', notifyError.message);
     }
   }
   
-  console.log('[ApprovalHandler] Denial complete');
+  log.debug('Denial complete');
 }
 
 /**
  * Handle approval of a folder access request
  */
 async function handleFolderApproval(context, data) {
-  console.log('[ApprovalHandler] handleFolderApproval called with data:', JSON.stringify(data));
+  log.debug('handleFolderApproval called', data);
   
   const approver = getApproverInfo(context.activity);
   const permission = data.permission || 'no_permissions';
@@ -368,12 +473,12 @@ async function handleFolderApproval(context, data) {
   const justification = data.justification;
   
   if (!folderUid) {
-    await context.send('❌ Error: Missing folder UID');
+    await context.send('Error: Missing folder UID');
     return;
   }
   
   if (!requesterEmail) {
-    await context.send('❌ Error: Missing requester email. Cannot grant access without email.');
+    await context.send('Error: Missing requester email. Cannot grant access without email.');
     return;
   }
   
@@ -386,41 +491,48 @@ async function handleFolderApproval(context, data) {
   );
   
   if (result.success) {
-    // Format expiry date
-    let expiresAtFormatted = 'Permanent';
-    if (result.expiresAt) {
-      const expiryDate = new Date(result.expiresAt);
-      expiresAtFormatted = expiryDate.toLocaleString('en-US', {
-        month: '2-digit',
-        day: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
+    // Format expiry date using helper function
+    const expiresAtFormatted = formatExpiryDate(result.expiresAt);
+    const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    
+    let updatedCard;
+    
+    if (result.invitationSent) {
+      log.info('Share invitation sent to user for folder (no Keeper account)');
+      
+      // Build invitation sent card
+      updatedCard = cards.buildFolderInvitationSentCard({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        folderName: folderName,
+        folderUid: folderUid,
+        justification: justification,
+        permission: permission,
+        approverName: approver.name,
+        processedTime: processedTime,
+      });
+    } else {
+      // Build the updated card with APPROVED status
+      updatedCard = cards.buildFolderApprovalCardWithStatus({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        folderName: folderName,
+        justification: justification,
+        status: 'approved',
+        approverName: approver.name,
+        permission: permission,
+        duration: duration === 'permanent' ? 'Permanent' : duration,
+        expiresAt: expiresAtFormatted,
       });
     }
     
-    // Build the updated card with APPROVED status
-    const updatedCard = cards.buildFolderApprovalCardWithStatus({
-      approvalId: approvalId,
-      requesterName: requesterName,
-      requesterEmail: requesterEmail,
-      folderName: folderName,
-      justification: justification,
-      status: 'approved',
-      approverName: approver.name,
-      permission: permission,
-      duration: duration === 'permanent' ? 'Permanent' : duration,
-      expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-    });
-    
-    // Try to update the original approval card using stored activity ID
     try {
       await tryUpdateApprovalCard(approvalId, updatedCard, context);
-      console.log('[ApprovalHandler] Successfully updated folder approval card with APPROVED status');
+      log.debug(`Successfully updated folder approval card with ${result.invitationSent ? 'INVITATION SENT' : 'APPROVED'} status`);
     } catch (updateError) {
-      console.log('[ApprovalHandler] Failed to update activity, sending new message:', updateError.message);
+      log.debug('Failed to update activity, sending new message', updateError.message);
       // Fallback: send a new message if update fails
       await context.send({
         type: 'message',
@@ -437,15 +549,28 @@ async function handleFolderApproval(context, data) {
       try {
         const channelService = getChannelService();
         if (channelService) {
-          const notificationCard = cards.buildRequesterNotificationCard({
-            approved: true,
-            recordTitle: folderName,
-            itemType: 'folder',
-            permission: permission,
-            duration: duration === 'permanent' ? 'Permanent' : duration,
-            expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-            approverName: approver.name,
-          });
+          let notificationCard;
+          
+          if (result.invitationSent) {
+            // Send invitation notification to requester
+            notificationCard = buildInvitationNotificationCard({
+              recordTitle: folderName,
+              itemType: 'folder',
+              permission: permission,
+              approverName: approver.name,
+            });
+          } else {
+            // Send regular approval notification
+            notificationCard = cards.buildRequesterNotificationCard({
+              approved: true,
+              recordTitle: folderName,
+              itemType: 'folder',
+              permission: permission,
+              duration: duration === 'permanent' ? 'Permanent' : duration,
+              expiresAt: expiresAtFormatted,
+              approverName: approver.name,
+            });
+          }
           
           const notificationSent = await channelService.sendDirectMessage(requesterId, {
             type: 'message',
@@ -456,17 +581,17 @@ async function handleFolderApproval(context, data) {
           });
           
           if (notificationSent) {
-            console.log(`[ApprovalHandler] Sent folder approval notification to requester: ${requesterId}`);
+            log.debug(`Sent ${result.invitationSent ? 'invitation' : 'folder approval'} notification to requester: ${requesterId}`);
           } else {
-            console.log(`[ApprovalHandler] Could not send notification to requester (no reference stored)`);
+            log.debug(`Could not send notification to requester (no reference stored)`);
           }
         }
       } catch (notifyError) {
-        console.error('[ApprovalHandler] Error sending requester notification:', notifyError.message);
+        log.error('Error sending requester notification', notifyError.message);
       }
     }
   } else {
-    await context.send('❌ Failed to grant folder access: ' + result.error);
+    await context.send('Failed to grant folder access: ' + result.error);
   }
 }
 
@@ -474,7 +599,7 @@ async function handleFolderApproval(context, data) {
  * Handle denial of a folder access request
  */
 async function handleFolderDenial(context, data) {
-  console.log('[ApprovalHandler] handleFolderDenial called with data:', JSON.stringify(data));
+  log.debug('handleFolderDenial called', data);
   
   const approver = getApproverInfo(context.activity);
   const folderName = data.folderName || data.folderUid || 'Unknown Folder';
@@ -482,7 +607,7 @@ async function handleFolderDenial(context, data) {
   const approvalId = data.approvalId || 'N/A';
   const justification = data.justification || '';
   
-  console.log('[ApprovalHandler] Denying folder access:', { approver: approver.name, folderName, requesterName });
+  log.debug('Denying folder access', { approver: approver.name, folderName, requesterName });
   
   // Build updated card with DENIED status
   const updatedCard = cards.buildFolderApprovalCardWithStatus({
@@ -494,12 +619,11 @@ async function handleFolderDenial(context, data) {
     approverName: approver.name,
   });
   
-  // Try to update the original approval card using stored activity ID
   try {
     await tryUpdateApprovalCard(approvalId, updatedCard, context);
-    console.log('[ApprovalHandler] Updated original folder card with denied status');
+    log.debug('Updated original folder card with denied status');
   } catch (error) {
-    console.error('[ApprovalHandler] Failed to update folder card, sending new message:', error.message);
+    log.debug('Failed to update folder card, sending new message', error.message);
     // Fallback: send as new message
     await context.send({
       type: 'message',
@@ -533,17 +657,17 @@ async function handleFolderDenial(context, data) {
         });
         
         if (notificationSent) {
-          console.log(`[ApprovalHandler] Sent folder denial notification to requester: ${requesterId}`);
+          log.debug(`Sent folder denial notification to requester: ${requesterId}`);
         } else {
-          console.log(`[ApprovalHandler] Could not send notification to requester (no reference stored)`);
+          log.debug(`Could not send notification to requester (no reference stored)`);
         }
       }
     } catch (notifyError) {
-      console.error('[ApprovalHandler] Error sending requester notification:', notifyError.message);
+      log.error('Error sending requester notification', notifyError.message);
     }
   }
   
-  console.log('[ApprovalHandler] Folder denial complete');
+  log.debug('Folder denial complete');
 }
 
 /**
@@ -560,7 +684,7 @@ async function handleShareApproval(context, data) {
   const requesterName = data.requesterName || 'User';
   
   if (!recordUid) {
-    await context.send('❌ Error: Missing record UID');
+    await context.send('Error: Missing record UID');
     return;
   }
   
@@ -665,13 +789,13 @@ async function routeApprovalActionWithCardResponse(context, data) {
   const approver = getApproverInfo(context.activity);
   const approvalId = data.approvalId;
   
-  console.log('[ApprovalHandler] routeApprovalActionWithCardResponse:', action);
+  log.debug('routeApprovalActionWithCardResponse', action);
   
   // Check if this approval has already been processed
   if (approvalId) {
     const existingStatus = getApprovalStatus(approvalId);
     if (existingStatus) {
-      console.log(`[ApprovalHandler] Approval ${approvalId} already processed: ${existingStatus.status}`);
+      log.debug(`Approval ${approvalId} already processed: ${existingStatus.status}`);
       
       const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
       const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
@@ -723,21 +847,15 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const durationSeconds = parseDuration(duration);
       const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
-      console.log('[ApprovalHandler] Approving record via Universal Action:', { 
-        approver: approver.name, 
-        recordTitle, 
-        requesterName,
-        permission,
-        duration
-      });
+      log.debug('Approving record via Universal Action', { approver: approver.name, recordTitle, requesterName, permission, duration });
       
       if (!recordUid) {
-        console.error('[ApprovalHandler] Missing record UID');
+        log.error('Missing record UID');
         return { error: 'Missing record UID' };
       }
       
       if (!requesterEmail) {
-        console.error('[ApprovalHandler] Missing requester email');
+        log.error('Missing requester email');
         return { error: 'Missing requester email' };
       }
       
@@ -750,28 +868,19 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
-        console.error('[ApprovalHandler] Failed to grant access:', result.error);
+        log.error('Failed to grant access', result.error);
         return { error: result.error };
       }
       
-      // Format expiry date
-      let expiresAtFormatted = 'Permanent';
-      if (result.expiresAt) {
-        const expiryDate = new Date(result.expiresAt);
-        expiresAtFormatted = expiryDate.toLocaleString('en-US', {
-          month: '2-digit',
-          day: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        });
-      }
+      // Format expiry date using helper function
+      const expiresAtFormatted = formatExpiryDate(result.expiresAt);
+      
+      // Check if invitation was sent (user doesn't have Keeper account yet)
+      const isInvitationSent = result.invitationSent;
       
       // Store approval status for refresh mechanism
       storeApprovalStatus(approvalId, {
-        status: 'approved',
+        status: isInvitationSent ? 'invitation_sent' : 'approved',
         type: 'record',
         approverName: approver.name,
         requesterName,
@@ -780,39 +889,69 @@ async function routeApprovalActionWithCardResponse(context, data) {
         justification: data.justification || '',
         permission,
         duration: duration === 'permanent' ? 'Permanent' : duration,
-        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+        expiresAt: expiresAtFormatted,
         processedTime,
+        invitationSent: isInvitationSent,
       });
       
-      // Build updated card with APPROVED status
-      const updatedCard = cards.buildRecordApprovalCardWithStatus({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        recordTitle,
-        justification: data.justification || '',
-        status: 'approved',
-        approverName: approver.name,
-        permission: permission,
-        duration: duration === 'permanent' ? 'Permanent' : duration,
-        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-        processedTime,
-      });
+      let updatedCard;
+      
+      if (isInvitationSent) {
+        log.info('Share invitation sent for record (user has no Keeper account)');
+        // Build invitation sent card
+        updatedCard = cards.buildRecordInvitationSentCard({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          recordUid,
+          justification: data.justification || '',
+          permission: permission,
+          approverName: approver.name,
+          processedTime,
+        });
+      } else {
+        // Build updated card with APPROVED status
+        updatedCard = cards.buildRecordApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          justification: data.justification || '',
+          status: 'approved',
+          approverName: approver.name,
+          permission: permission,
+          duration: duration === 'permanent' ? 'Permanent' : duration,
+          expiresAt: expiresAtFormatted,
+          processedTime,
+        });
+      }
       
       // Send notification to requester (async, don't block)
       if (requesterId) {
         try {
           const channelService = getChannelService();
           if (channelService) {
-            const notificationCard = cards.buildRequesterNotificationCard({
-              approved: true,
-              recordTitle: recordTitle,
-              permission: permission,
-              duration: duration === 'permanent' ? 'Permanent' : duration,
-              expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-              approverName: approver.name,
-              itemType: 'record',
-            });
+            let notificationCard;
+            
+            if (isInvitationSent) {
+              notificationCard = buildInvitationNotificationCard({
+                recordTitle: recordTitle,
+                itemType: 'record',
+                permission: permission,
+                approverName: approver.name,
+              });
+            } else {
+              notificationCard = cards.buildRequesterNotificationCard({
+                approved: true,
+                recordTitle: recordTitle,
+                permission: permission,
+                duration: duration === 'permanent' ? 'Permanent' : duration,
+                expiresAt: expiresAtFormatted,
+                approverName: approver.name,
+                itemType: 'record',
+              });
+            }
             
             channelService.sendDirectMessage(requesterId, {
               type: 'message',
@@ -822,14 +961,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
               }],
             }).then(sent => {
               if (sent) {
-                console.log(`[ApprovalHandler] Sent approval notification to requester`);
+                log.debug(`Sent ${isInvitationSent ? 'invitation' : 'approval'} notification to requester`);
               }
             }).catch(err => {
-              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+              log.debug(`Could not send notification`, err.message);
             });
           }
         } catch (notifyError) {
-          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+          log.error('Error sending notification', notifyError.message);
         }
       }
       
@@ -843,21 +982,15 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const durationSeconds = parseDuration(duration);
       const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
-      console.log('[ApprovalHandler] Approving folder via Universal Action:', { 
-        approver: approver.name, 
-        folderName, 
-        requesterName,
-        permission,
-        duration
-      });
+      log.debug('Approving folder via Universal Action', { approver: approver.name, folderName, requesterName, permission, duration });
       
       if (!folderUid) {
-        console.error('[ApprovalHandler] Missing folder UID');
+        log.error('Missing folder UID');
         return { error: 'Missing folder UID' };
       }
       
       if (!requesterEmail) {
-        console.error('[ApprovalHandler] Missing requester email');
+        log.error('Missing requester email');
         return { error: 'Missing requester email' };
       }
       
@@ -870,28 +1003,19 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
-        console.error('[ApprovalHandler] Failed to grant folder access:', result.error);
+        log.error('Failed to grant folder access', result.error);
         return { error: result.error };
       }
       
-      // Format expiry date
-      let expiresAtFormatted = 'Permanent';
-      if (result.expiresAt) {
-        const expiryDate = new Date(result.expiresAt);
-        expiresAtFormatted = expiryDate.toLocaleString('en-US', {
-          month: '2-digit',
-          day: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        });
-      }
+      // Format expiry date using helper function
+      const expiresAtFormatted = formatExpiryDate(result.expiresAt);
+      
+      // Check if invitation was sent (user doesn't have Keeper account yet)
+      const isInvitationSent = result.invitationSent;
       
       // Store approval status for refresh mechanism
       storeApprovalStatus(approvalId, {
-        status: 'approved',
+        status: isInvitationSent ? 'invitation_sent' : 'approved',
         type: 'folder',
         approverName: approver.name,
         requesterName,
@@ -900,39 +1024,69 @@ async function routeApprovalActionWithCardResponse(context, data) {
         justification: data.justification || '',
         permission,
         duration: duration === 'permanent' ? 'Permanent' : duration,
-        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
+        expiresAt: expiresAtFormatted,
         processedTime,
+        invitationSent: isInvitationSent,
       });
       
-      // Build updated card with APPROVED status
-      const updatedCard = cards.buildFolderApprovalCardWithStatus({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        folderName,
-        justification: data.justification || '',
-        status: 'approved',
-        approverName: approver.name,
-        permission: permission,
-        duration: duration === 'permanent' ? 'Permanent' : duration,
-        expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-        processedTime,
-      });
+      let updatedCard;
+      
+      if (isInvitationSent) {
+        log.info('Share invitation sent for folder (user has no Keeper account)');
+        // Build invitation sent card
+        updatedCard = cards.buildFolderInvitationSentCard({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          folderUid,
+          justification: data.justification || '',
+          permission: permission,
+          approverName: approver.name,
+          processedTime,
+        });
+      } else {
+        // Build updated card with APPROVED status
+        updatedCard = cards.buildFolderApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          justification: data.justification || '',
+          status: 'approved',
+          approverName: approver.name,
+          permission: permission,
+          duration: duration === 'permanent' ? 'Permanent' : duration,
+          expiresAt: expiresAtFormatted,
+          processedTime,
+        });
+      }
       
       // Send notification to requester (async, don't block)
       if (requesterId) {
         try {
           const channelService = getChannelService();
           if (channelService) {
-            const notificationCard = cards.buildRequesterNotificationCard({
-              approved: true,
-              recordTitle: folderName,
-              itemType: 'folder',
-              permission: permission,
-              duration: duration === 'permanent' ? 'Permanent' : duration,
-              expiresAt: duration === 'permanent' ? null : expiresAtFormatted,
-              approverName: approver.name,
-            });
+            let notificationCard;
+            
+            if (isInvitationSent) {
+              notificationCard = buildInvitationNotificationCard({
+                recordTitle: folderName,
+                itemType: 'folder',
+                permission: permission,
+                approverName: approver.name,
+              });
+            } else {
+              notificationCard = cards.buildRequesterNotificationCard({
+                approved: true,
+                recordTitle: folderName,
+                itemType: 'folder',
+                permission: permission,
+                duration: duration === 'permanent' ? 'Permanent' : duration,
+                expiresAt: expiresAtFormatted,
+                approverName: approver.name,
+              });
+            }
             
             channelService.sendDirectMessage(requesterId, {
               type: 'message',
@@ -942,14 +1096,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
               }],
             }).then(sent => {
               if (sent) {
-                console.log(`[ApprovalHandler] Sent folder approval notification to requester`);
+                log.debug(`Sent ${isInvitationSent ? 'invitation' : 'folder approval'} notification to requester`);
               }
             }).catch(err => {
-              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+              log.debug(`Could not send notification`, err.message);
             });
           }
         } catch (notifyError) {
-          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+          log.error('Error sending notification', notifyError.message);
         }
       }
       
@@ -960,11 +1114,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const { approvalId, recordTitle, requesterName, requesterId, requesterEmail } = data;
       const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
-      console.log('[ApprovalHandler] Denying record via Universal Action:', { 
-        approver: approver.name, 
-        recordTitle, 
-        requesterName 
-      });
+      log.debug('Denying record via Universal Action', { approver: approver.name, recordTitle, requesterName });
       
       // Store denial status for refresh mechanism
       storeApprovalStatus(approvalId, {
@@ -1010,18 +1160,17 @@ async function routeApprovalActionWithCardResponse(context, data) {
               }],
             }).then(sent => {
               if (sent) {
-                console.log(`[ApprovalHandler] Sent denial notification to requester`);
+                log.debug(`Sent denial notification to requester`);
               }
             }).catch(err => {
-              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+              log.debug(`Could not send notification`, err.message);
             });
           }
         } catch (notifyError) {
-          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+          log.error('Error sending notification', notifyError.message);
         }
       }
       
-      // Return the updated card - Teams will replace the original card with this
       return { updatedCard };
     }
     
@@ -1029,11 +1178,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const { approvalId, folderName, requesterName, requesterId, requesterEmail } = data;
       const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
-      console.log('[ApprovalHandler] Denying folder via Universal Action:', { 
-        approver: approver.name, 
-        folderName, 
-        requesterName 
-      });
+      log.debug('Denying folder via Universal Action', { approver: approver.name, folderName, requesterName });
       
       // Store denial status for refresh mechanism
       storeApprovalStatus(approvalId, {
@@ -1079,14 +1224,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
               }],
             }).then(sent => {
               if (sent) {
-                console.log(`[ApprovalHandler] Sent folder denial notification to requester`);
+                log.debug(`Sent folder denial notification to requester`);
               }
             }).catch(err => {
-              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+              log.debug(`Could not send notification`, err.message);
             });
           }
         } catch (notifyError) {
-          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+          log.error('Error sending notification', notifyError.message);
         }
       }
       
@@ -1100,16 +1245,10 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const editable = data.editable === 'true' || data.editable === true;
       const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
-      console.log('[ApprovalHandler] Approving one-time share via Universal Action:', { 
-        approver: approver.name, 
-        recordTitle, 
-        requesterName,
-        duration,
-        editable
-      });
+      log.debug('Approving one-time share via Universal Action', { approver: approver.name, recordTitle, requesterName, duration, editable });
       
       if (!recordUid) {
-        console.error('[ApprovalHandler] Missing record UID for share');
+        log.error('Missing record UID for share');
         return { error: 'Missing record UID' };
       }
       
@@ -1121,7 +1260,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
-        console.error('[ApprovalHandler] Failed to create one-time share:', result.error);
+        log.error('Failed to create one-time share', result.error);
         return { error: result.error };
       }
       
@@ -1248,14 +1387,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
               }],
             }).then(sent => {
               if (sent) {
-                console.log(`[ApprovalHandler] Sent share link to requester via DM`);
+                log.debug(`Sent share link to requester via DM`);
               }
             }).catch(err => {
-              console.log(`[ApprovalHandler] Could not send share link:`, err.message);
+              log.debug(`Could not send share link`, err.message);
             });
           }
         } catch (notifyError) {
-          console.error('[ApprovalHandler] Error sending share link:', notifyError.message);
+          log.error('Error sending share link', notifyError.message);
         }
       }
       
@@ -1266,11 +1405,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
       const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
       
-      console.log('[ApprovalHandler] Denying one-time share via Universal Action:', { 
-        approver: approver.name, 
-        recordTitle, 
-        requesterName 
-      });
+      log.debug('Denying one-time share via Universal Action', { approver: approver.name, recordTitle, requesterName });
       
       // Store denial status for refresh mechanism
       storeApprovalStatus(approvalId, {
@@ -1317,14 +1452,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
               }],
             }).then(sent => {
               if (sent) {
-                console.log(`[ApprovalHandler] Sent share denial notification to requester`);
+                log.debug(`Sent share denial notification to requester`);
               }
             }).catch(err => {
-              console.log(`[ApprovalHandler] Could not send notification:`, err.message);
+              log.debug(`Could not send notification`, err.message);
             });
           }
         } catch (notifyError) {
-          console.error('[ApprovalHandler] Error sending notification:', notifyError.message);
+          log.error('Error sending notification', notifyError.message);
         }
       }
       
@@ -1350,22 +1485,20 @@ async function handleRefreshApprovalCard(data) {
   const { approvalId, type } = data;
   
   if (!approvalId) {
-    console.log('[ApprovalHandler] Refresh: No approvalId provided');
+    log.debug('Refresh: No approvalId provided');
     return null;
   }
   
-  console.log(`[ApprovalHandler] Checking refresh for approval ${approvalId} (type: ${type})`);
+  log.debug(`Checking refresh for approval ${approvalId} (type: ${type})`);
   
-  // Check if this approval has been processed
   const status = getApprovalStatus(approvalId);
   
   if (!status) {
-    // Not processed yet - return null to keep the original card
-    console.log(`[ApprovalHandler] Approval ${approvalId} not yet processed, keeping original card`);
+    log.debug(`Approval ${approvalId} not yet processed, keeping original card`);
     return null;
   }
   
-  console.log(`[ApprovalHandler] Approval ${approvalId} has status: ${status.status}`);
+  log.debug(`Approval ${approvalId} has status: ${status.status}`);
   
   // Return the appropriate status card based on type
   if (type === 'record') {
@@ -1398,13 +1531,13 @@ async function handleRefreshApprovalCard(data) {
     });
   }
   
-  console.log(`[ApprovalHandler] Unknown type ${type} for refresh`);
+  log.debug(`Unknown type ${type} for refresh`);
   return null;
 }
 
 /**
  * Handle inline lookup actions (search from the card itself)
- * Called when user clicks "Look Up" button on the approval card
+ * Called when user clicks "Search" button on the approval card
  * Now supports multiple results with dropdown selection
  * 
  * @param {string} verb - 'lookup_record', 'lookup_folder', or 'lookup_share'
@@ -1430,7 +1563,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
   const query = searchQuery || identifier || (isFolder ? folderName : recordTitle) || '';
   
   const lookupType = isFolder ? 'folder' : (isShare ? 'share' : 'record');
-  console.log(`[ApprovalHandler] Inline ${lookupType} lookup:`, { query, approvalId });
+  log.debug(`Inline ${lookupType} lookup`, { query, approvalId });
   
   if (!query.trim()) {
     // Return card with "no results" and allow retry
@@ -1483,7 +1616,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
       ? await keeperClient.searchFolders(query, 10)
       : await keeperClient.searchRecords(query, 10);
     
-    console.log(`[ApprovalHandler] Search results for "${query}":`, results?.length || 0);
+    log.debug(`Search results for "${query}": ${results?.length || 0}`);
     
     if (!results || results.length === 0) {
       // No results found
@@ -1586,7 +1719,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
       });
     }
   } catch (error) {
-    console.error(`[ApprovalHandler] Error searching ${lookupType}s:`, error);
+    log.error(`Error searching ${lookupType}s`, error);
     
     // Return error card
     if (isFolder) {
@@ -1656,7 +1789,7 @@ function handleResetCard(verb, data) {
   } = data;
   
   const resetType = isFolder ? 'folder' : (isShare ? 'share' : 'record');
-  console.log(`[ApprovalHandler] Resetting ${resetType} card:`, { approvalId });
+  log.debug(`Resetting ${resetType} card`, { approvalId });
   
   if (isFolder) {
     return cards.buildFolderApprovalCard({
@@ -1719,7 +1852,7 @@ function handleShowCreateForm(data) {
     searchQuery,
   } = data;
   
-  console.log(`[ApprovalHandler] Showing create record form:`, { approvalId });
+  log.debug('Showing create record form', { approvalId });
   
   return cards.buildRecordCreationCard({
     approvalId,
@@ -1755,7 +1888,7 @@ async function handleSubmitCreateRecord(data, formData) {
   
   const { recordTitle, recordLogin, recordPassword, recordUrl, recordNotes } = formData;
   
-  console.log(`[ApprovalHandler] Creating record:`, { title: recordTitle, login: recordLogin, approvalId });
+  log.debug('Creating record', { title: recordTitle, approvalId });
   
   // Validate required fields
   if (!recordTitle || !recordTitle.trim()) {
@@ -1803,7 +1936,7 @@ async function handleSubmitCreateRecord(data, formData) {
   });
   
   if (!result.success) {
-    console.error('[ApprovalHandler] Failed to create record:', result.error);
+    log.error('Failed to create record', result.error);
     // Return error card (show form again with error message)
     return {
       type: 'AdaptiveCard',
@@ -1831,7 +1964,7 @@ async function handleSubmitCreateRecord(data, formData) {
     };
   }
   
-  console.log('[ApprovalHandler] Record created successfully:', result.recordUid);
+  log.debug('Record created successfully', result.recordUid);
   
   // Safe values for the card
   const safeApprovalId = approvalId || '';
@@ -1892,15 +2025,15 @@ async function handleSubmitCreateRecord(data, formData) {
     ],
   };
   
-  console.log('[ApprovalHandler] Returning created record card');
+  log.debug('Returning created record card');
   return createdRecordCard;
 }
 
 /**
- * Handle cancel_create_form action - returns to search results card (with no results)
+ * Handle cancel_create_form action - returns to search results card with re-fetched results
  * 
  * @param {Object} data - Card action data
- * @returns {Object} - Search results card with no results
+ * @returns {Object} - Search results card with actual search results
  */
 async function handleCancelCreateForm(data) {
   const {
@@ -1915,9 +2048,23 @@ async function handleCancelCreateForm(data) {
     searchQuery,
   } = data;
   
-  console.log(`[ApprovalHandler] Cancelling create form, returning to search:`, { approvalId });
+  const query = searchQuery || recordTitle || identifier;
+  log.debug('Cancelling create form, re-running search', { approvalId, query });
   
-  // Return to search results card with no results (same as when search found nothing)
+  // Re-run the search to restore previous results
+  let searchResults = [];
+  let noResults = true;
+  
+  if (query) {
+    try {
+      searchResults = await keeperClient.searchRecords(query);
+      noResults = !searchResults || searchResults.length === 0;
+      log.debug(`Search results for "${query}": ${searchResults.length}`);
+    } catch (error) {
+      log.error('Error re-running search', error);
+    }
+  }
+  
   return cards.buildRecordSearchResultsCard({
     approvalId,
     requesterName,
@@ -1926,8 +2073,9 @@ async function handleCancelCreateForm(data) {
     requesterAadObjectId,
     justification,
     identifier,
-    searchQuery: searchQuery || recordTitle,
-    noResults: true,
+    searchQuery: query,
+    records: searchResults,
+    noResults,
     originalRecordTitle: recordTitle,
   });
 }

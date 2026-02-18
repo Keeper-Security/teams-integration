@@ -1,8 +1,8 @@
 const app = require("./app");
 const http = require("http");
+const { createLogger } = require("./services");
 
-// Health check server for Docker/Kubernetes
-// Runs on a separate path to avoid interfering with Teams Bot endpoints
+const log = createLogger('Server');
 const HEALTH_PORT = process.env.HEALTH_PORT || 3979;
 
 const healthServer = http.createServer((req, res) => {
@@ -20,14 +20,11 @@ const healthServer = http.createServer((req, res) => {
   }
 });
 
-// Start the application
 (async () => {
-  // Start health check server
   healthServer.listen(HEALTH_PORT, () => {
-    console.log(`[Health] Health check endpoint available at http://localhost:${HEALTH_PORT}/api/health`);
+    log.info(`Health check endpoint available at http://localhost:${HEALTH_PORT}/api/health`);
   });
   
-  // Start Teams bot
   await app.start();
-  console.log(`\nBot started, app listening to`, process.env.PORT || process.env.port || 3978);
+  log.info(`Bot started, app listening on port ${process.env.PORT || process.env.port || 3978}`);
 })();

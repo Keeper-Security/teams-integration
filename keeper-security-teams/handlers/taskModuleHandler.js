@@ -5,7 +5,9 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
-const { getChannelService, getApprovalStatus } = require('../services');
+const { getChannelService, getApprovalStatus, createLogger } = require('../services');
+
+const log = createLogger('TaskModule');
 
 /**
  * Duration string to seconds mapping
@@ -71,12 +73,7 @@ const PERMANENT_ONLY_FOLDER_PERMISSIONS = ['manage_users', 'manage_all'];
 async function handleTaskFetch(context, activity) {
   let requestData = {};
   
-  console.log('[TaskModule] Raw activity structure:', {
-    hasValue: !!activity.value,
-    hasData: !!activity.data,
-    valueKeys: activity.value ? Object.keys(activity.value) : [],
-    activityKeys: Object.keys(activity)
-  });
+  log.debug('Raw activity structure', { hasValue: !!activity.value, hasData: !!activity.data });
   
   // Try to extract data from different possible structures
   if (activity.value) {
@@ -100,20 +97,13 @@ async function handleTaskFetch(context, activity) {
   let identifier = requestData.identifier;
   let approvalContext = requestData.approvalContext;
   
-  console.log('[TaskModule] Fetch:', { 
-    type, 
-    query, 
-    approvalId, 
-    identifier,
-    hasApprovalContext: !!approvalContext,
-    rawRequest: JSON.stringify(requestData).substring(0, 400)
-  });
+  log.debug('Fetch', { type, query, approvalId, identifier, hasApprovalContext: !!approvalContext });
 
   // Check if this approval has already been processed
   if (approvalId) {
     const existingStatus = getApprovalStatus(approvalId);
     if (existingStatus) {
-      console.log(`[TaskModule] Approval ${approvalId} already processed:`, existingStatus.status);
+      log.debug(`Approval ${approvalId} already processed: ${existingStatus.status}`);
       
       const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
       const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
@@ -135,7 +125,7 @@ async function handleTaskFetch(context, activity) {
                 body: [
                   {
                     type: 'TextBlock',
-                    text: `✅ This request has already been ${statusText.toLowerCase()}`,
+                    text: `This request has already been ${statusText.toLowerCase()}`,
                     weight: 'Bolder',
                     size: 'Large',
                     wrap: true,
@@ -194,7 +184,7 @@ async function handleTaskFetch(context, activity) {
 
   if (searchType === 'search-record' || searchType === 'search_records') {
     if (searchQuery && searchQuery.trim()) {
-      console.log('[TaskModule] Auto-executing record search on modal open for:', searchQuery);
+      log.debug('Auto-executing record search on modal open for', searchQuery);
       return await handleSearchAction(searchQuery, searchApprovalId, contextData, true, 'view_only', 'record');
     } else {
       return buildSearchModal('', searchApprovalId, false, contextData, [], true, 'view_only', null, 'record');
@@ -203,7 +193,7 @@ async function handleTaskFetch(context, activity) {
   
   if (searchType === 'search-folder' || searchType === 'search_folders') {
     if (searchQuery && searchQuery.trim()) {
-      console.log('[TaskModule] Auto-executing folder search on modal open for:', searchQuery);
+      log.debug('Auto-executing folder search on modal open for', searchQuery);
       return await handleSearchAction(searchQuery, searchApprovalId, contextData, true, 'no_permissions', 'folder');
     } else {
       return buildSearchModal('', searchApprovalId, false, contextData, [], true, 'no_permissions', null, 'folder');
@@ -220,7 +210,7 @@ async function handleTaskSubmit(context, activity) {
   // Simple data extraction - activity.value contains form data directly
   const submitData = activity.value?.data || activity.value || {};
   
-  console.log('[TaskModule] Submit data:', JSON.stringify(submitData, null, 2));
+  log.debug('Submit data', submitData);
   
   // Parse approvalContext if it's a JSON string
   let approvalContext = submitData.approvalContext;
@@ -228,7 +218,7 @@ async function handleTaskSubmit(context, activity) {
     try {
       approvalContext = JSON.parse(approvalContext);
     } catch (e) {
-      console.warn('[TaskModule] Failed to parse approvalContext:', e);
+      log.warn('Failed to parse approvalContext', e.message);
       approvalContext = {};
     }
   }
@@ -239,7 +229,7 @@ async function handleTaskSubmit(context, activity) {
     try {
       cachedResults = JSON.parse(cachedResults);
     } catch (e) {
-      console.warn('[TaskModule] Failed to parse cachedResults:', e);
+      log.warn('Failed to parse cachedResults', e.message);
       cachedResults = [];
     }
   }
@@ -249,17 +239,7 @@ async function handleTaskSubmit(context, activity) {
   // Determine search type from context or submit data
   const itemType = searchType || approvalContext?.searchType || 'record';
 
-  console.log('[TaskModule] Submit:', { 
-    action, 
-    searchQuery, 
-    selectedUid, 
-    approvalId,
-    permission,
-    duration,
-    searchType: itemType,
-    hasApprovalContext: !!approvalContext,
-    hasCachedResults: !!cachedResults
-  });
+  log.debug('Submit', { action, searchQuery, selectedUid, approvalId, permission, searchType: itemType });
 
   if (action === 'search' || action === 'refine_search') {
     // Determine showDuration based on current permission and item type
@@ -387,7 +367,7 @@ function buildSearchModal(query, approvalId, isLoading = false, approvalContext 
   if (isLoading) {
     body.push({
       type: 'TextBlock',
-      text: '🔄 Searching...',
+      text: 'Searching...',
       color: 'Accent',
       wrap: true,
     });
@@ -399,7 +379,7 @@ function buildSearchModal(query, approvalId, isLoading = false, approvalContext 
     if (newlyCreatedUid && results.length === 1 && results[0].uid === newlyCreatedUid) {
       body.push({
         type: 'TextBlock',
-        text: `✅ New record "${newlyCreatedTitle}" created successfully!`,
+        text: `New record "${newlyCreatedTitle}" created successfully!`,
         color: 'Good',
         wrap: true,
         weight: 'Bolder',
@@ -477,7 +457,7 @@ function buildSearchModal(query, approvalId, isLoading = false, approvalContext 
       // Permanent access notice
       body.push({
         type: 'TextBlock',
-        text: 'ℹ️ **Permanent Access** - This permission does not support time limits.',
+        text: '**Permanent Access** - This permission does not support time limits.',
         wrap: true,
         color: 'Accent',
       });
@@ -493,7 +473,7 @@ function buildSearchModal(query, approvalId, isLoading = false, approvalContext 
   } else if (query) {
     body.push({
       type: 'TextBlock',
-      text: `❌ No ${itemLabelPlural.toLowerCase()} found matching "${query}"`,
+      text: `No ${itemLabelPlural.toLowerCase()} found matching "${query}"`,
       color: 'Attention',
       wrap: true,
     });
@@ -561,7 +541,7 @@ async function handleSearchAction(query, approvalId, approvalContext, showDurati
     return buildSearchModal('', approvalId, false, approvalContext, [], showDuration, currentPermission || defaultPermission, null, searchType);
   }
 
-  console.log(`[TaskModule] Executing ${searchType} search for:`, query);
+  log.debug(`Executing ${searchType} search`, query);
 
   let results = [];
   
@@ -571,11 +551,11 @@ async function handleSearchAction(query, approvalId, approvalContext, showDurati
     
     if (folder) {
       results = [{ uid: folder.uid, title: folder.name || folder.uid, name: folder.name }];
-      console.log('[TaskModule] Found folder by UID:', folder.uid);
+      log.debug('Found folder by UID', folder.uid);
     } else {
       const searchResults = await keeperClient.searchFolders(query, 10);
       results = searchResults.map(f => ({ uid: f.uid, title: f.name || f.uid, name: f.name }));
-      console.log('[TaskModule] Found', results.length, 'folders by search');
+      log.debug(`Found ${results.length} folders by search`);
     }
   } else {
     // Record search
@@ -583,11 +563,11 @@ async function handleSearchAction(query, approvalId, approvalContext, showDurati
     
     if (record) {
       results = [{ uid: record.uid, title: record.title || record.uid }];
-      console.log('[TaskModule] Found record by UID:', record.uid);
+      log.debug('Found record by UID', record.uid);
     } else {
       const searchResults = await keeperClient.searchRecords(query, 10);
       results = searchResults.map(r => ({ uid: r.uid, title: r.title || r.uid }));
-      console.log('[TaskModule] Found', results.length, 'records by search');
+      log.debug(`Found ${results.length} records by search`);
     }
   }
 
@@ -605,13 +585,13 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   const itemLabel = isFolder ? 'folder' : 'record';
   const itemLabelCap = isFolder ? 'Folder' : 'Record';
   
-  console.log(`[TaskModule] Preparing ${itemLabel} confirmation:`, { selectedUid, approvalId, permission, duration });
+  log.debug(`Preparing ${itemLabel} confirmation`, { selectedUid, approvalId, permission, duration });
 
   if (!selectedUid) {
     return {
       task: {
         type: 'message',
-        value: `❌ Please select a ${itemLabel} first.`,
+        value: `Please select a ${itemLabel} first.`,
       },
     };
   }
@@ -619,7 +599,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   // Force permanent duration for permanent-only permissions
   const permanentPerms = isFolder ? PERMANENT_ONLY_FOLDER_PERMISSIONS : PERMANENT_ONLY_RECORD_PERMISSIONS;
   if (permanentPerms.includes(permission)) {
-    console.log(`[TaskModule] Permission "${permission}" is permanent-only, forcing duration to permanent`);
+    log.debug(`Permission "${permission}" is permanent-only, forcing duration to permanent`);
     duration = 'permanent';
   }
 
@@ -643,7 +623,7 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     return {
       task: {
         type: 'message',
-        value: `❌ ${itemLabelCap} not found: ${selectedUid}`,
+        value: `${itemLabelCap} not found: ${selectedUid}`,
       },
     };
   }
@@ -652,30 +632,30 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
   let requesterEmail = approvalContext.requesterEmail;
   
   if (!requesterEmail && approvalContext.requesterAadObjectId) {
-    console.log('[TaskModule] Email missing, fetching from Graph API...');
+    log.debug('Email missing, fetching from Graph API...');
     try {
       const graphService = require('../services/graphService');
       requesterEmail = await graphService.getUserEmail(approvalContext.requesterAadObjectId);
       if (requesterEmail) {
-        console.log(`[TaskModule] Successfully fetched email: ${requesterEmail}`);
+        log.debug('Successfully fetched email', requesterEmail);
       }
     } catch (error) {
-      console.error('[TaskModule] Error fetching email:', error.message);
+      log.error('Error fetching email', error.message);
     }
   }
   
   if (requesterEmail && requesterEmail.endsWith('@users.teams.ms')) {
-    console.log('[TaskModule] Detected old email format, fetching real email...');
+    log.debug('Detected old email format, fetching real email...');
     try {
       const aadObjectId = requesterEmail.replace('@users.teams.ms', '');
       const graphService = require('../services/graphService');
       const realEmail = await graphService.getUserEmail(aadObjectId);
       if (realEmail) {
-        console.log(`[TaskModule] Fetched real email: ${realEmail}`);
+        log.debug('Fetched real email', realEmail);
         requesterEmail = realEmail;
       }
     } catch (error) {
-      console.error('[TaskModule] Error fetching real email:', error.message);
+      log.error('Error fetching real email', error.message);
     }
   }
   
@@ -683,12 +663,12 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
     return {
       task: {
         type: 'message',
-        value: '❌ Error: Missing requester email. Cannot proceed.\n\nThe bot needs Microsoft Graph API permissions (User.Read.All) to fetch user emails.',
+        value: 'Error: Missing requester email. Cannot proceed.\n\nThe bot needs Microsoft Graph API permissions (User.Read.All) to fetch user emails.',
       },
     };
   }
 
-  console.log(`[TaskModule] Sending ${itemLabel} confirmation card with Action.Execute buttons`);
+  log.debug(`Sending ${itemLabel} confirmation card with Action.Execute buttons`);
 
   // Build the confirmation card with Action.Execute buttons
   // When admin clicks Approve, it will go through routeApprovalActionWithCardResponse
@@ -729,13 +709,13 @@ async function handleSelectAndApprove(context, selectedUid, approvalId, permissi
         content: confirmationCard,
       }],
     });
-    console.log(`[TaskModule] Sent ${itemLabel} confirmation card - awaiting admin's Approve/Deny action`);
+    log.debug(`Sent ${itemLabel} confirmation card - awaiting admin's Approve/Deny action`);
   } catch (sendError) {
-    console.error('[TaskModule] Error sending confirmation card:', sendError.message);
+    log.error('Error sending confirmation card', sendError.message);
     return {
       task: {
         type: 'message',
-        value: `❌ Error sending confirmation card: ${sendError.message}`,
+        value: `Error sending confirmation card: ${sendError.message}`,
       },
     };
   }

@@ -4,6 +4,9 @@
 
 const axios = require('axios');
 const config = require('../config');
+const { createLogger } = require('./logger');
+
+const log = createLogger('KeeperClient');
 
 /**
  * Shell escape a string for safe command execution
@@ -56,7 +59,7 @@ class KeeperClient {
       const response = await this.client.get('/queue/status', { timeout: 5000 });
       return response.status === 200;
     } catch (error) {
-      console.error('[KeeperClient] Health check failed:', error.message);
+      log.error('Health check failed', error.message);
       return false;
     }
   }
@@ -69,13 +72,13 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
-        console.log('[KeeperClient] Search records failed:', result?.message);
+        log.debug('Search records failed', result?.message);
         return [];
       }
       
       return this._parseSearchResults(result.data, 'record', limit);
     } catch (error) {
-      console.error('[KeeperClient] Error searching records:', error.message);
+      log.error('Error searching records', error.message);
       return [];
     }
   }
@@ -86,13 +89,13 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
-        console.log('[KeeperClient] Search folders failed:', result?.message);
+        log.debug('Search folders failed', result?.message);
         return [];
       }
       
       return this._parseSearchResults(result.data, 'folder', limit);
     } catch (error) {
-      console.error('[KeeperClient] Error searching folders:', error.message);
+      log.error('Error searching folders', error.message);
       return [];
     }
   }
@@ -103,7 +106,7 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 15);
       
       if (!result || result.status !== 'success') {
-        console.log('[KeeperClient] Get record failed:', result?.message);
+        log.debug('Get record failed', result?.message);
         return null;
       }
       
@@ -137,7 +140,7 @@ class KeeperClient {
         notes: notes,
       };
     } catch (error) {
-      console.error('[KeeperClient] Error getting record:', error.message);
+      log.error('Error getting record', error.message);
       return null;
     }
   }
@@ -149,7 +152,7 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 15);
       
       if (!result || result.status !== 'success') {
-        console.log('[KeeperClient] Get folder failed:', result?.message);
+        log.debug('Get folder failed', result?.message);
         return null;
       }
       
@@ -167,7 +170,7 @@ class KeeperClient {
         folderType: item.type || 'shared_folder',
       };
     } catch (error) {
-      console.error('[KeeperClient] Error getting folder:', error.message);
+      log.error('Error getting folder', error.message);
       return null;
     }
   }
@@ -228,11 +231,16 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 15);
       
       if (result?.status === 'success') {
+        // Check if invitation was sent (user doesn't have Keeper account yet)
+        const message = result?.message || '';
+        const invitationSent = this._isInvitationSent(message);
+        
         return {
           success: true,
           expiresAt: expiresAtStr,
           permission: permission,
           duration: isPermanent ? 'permanent' : 'temporary',
+          invitationSent: invitationSent,
         };
       } else {
         const errorMsg = this._formatError(result?.message);
@@ -283,11 +291,16 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 15);
       
       if (result?.status === 'success') {
+        // Check if invitation was sent (user doesn't have Keeper account yet)
+        const message = result?.message || '';
+        const invitationSent = this._isInvitationSent(message);
+        
         return {
           success: true,
           expiresAt: expiresAtStr,
           permission: permission,
           duration: isPermanent ? 'permanent' : 'temporary',
+          invitationSent: invitationSent,
         };
       } else {
         const errorMsg = this._formatError(result?.message);
@@ -419,7 +432,7 @@ class KeeperClient {
       }
       
       const command = commandParts.join(' ');
-      console.log('[KeeperClient] Creating record with command:', command.replace(/password=[^\s]+/, 'password=***'));
+      log.debug('Creating record with command', command.replace(/password=[^\s]+/, 'password=***'));
       
       const result = await this._executeCommandAsync(command, 20);
       
@@ -428,7 +441,7 @@ class KeeperClient {
         return { success: false, error: 'Failed to create record: ' + errorMsg };
       }
       
-      console.log('[KeeperClient] Record created successfully, searching for UID...');
+      log.debug('Record created successfully, searching for UID...');
       
       // record-add doesn't return the UID, so we need to search for it
       // Wait a moment for the record to be indexed
@@ -448,7 +461,7 @@ class KeeperClient {
             const recordUid = matchingRecord.uid || matchingRecord.record_uid;
             
             if (recordUid) {
-              console.log('[KeeperClient] Found created record UID:', recordUid);
+              log.debug('Found created record UID', recordUid);
               return {
                 success: true,
                 recordUid: recordUid,
@@ -459,21 +472,20 @@ class KeeperClient {
           }
         }
         
-        // If search didn't find it, the record was still created
-        console.warn('[KeeperClient] Record created but UID not found via search');
+        log.warn('Record created but UID not found via search');
         return {
           success: false,
           error: 'Record created but UID could not be retrieved. The record exists in your vault but the approval flow cannot continue automatically.',
         };
       } catch (searchError) {
-        console.error('[KeeperClient] Error searching for created record:', searchError.message);
+        log.error('Error searching for created record', searchError.message);
         return {
           success: false,
           error: 'Record created but UID could not be retrieved: ' + searchError.message,
         };
       }
     } catch (error) {
-      console.error('[KeeperClient] Exception in createRecord:', error);
+      log.error('Exception in createRecord', error);
       return { success: false, error: 'Error creating record: ' + error.message };
     }
   }
@@ -485,7 +497,7 @@ class KeeperClient {
       const result = await this._executeCommandAsync('epm sync-down', 30);
       return result?.status === 'success';
     } catch (error) {
-      console.error('[KeeperClient] PEDM sync failed:', error.message);
+      log.error('PEDM sync failed', error.message);
       return false;
     }
   }
@@ -508,7 +520,7 @@ class KeeperClient {
       
       return data;
     } catch (error) {
-      console.error('[KeeperClient] Error getting PEDM requests:', error.message);
+      log.error('Error getting PEDM requests', error.message);
       return [];
     }
   }
@@ -589,7 +601,7 @@ class KeeperClient {
       
       return data;
     } catch (error) {
-      console.error('[KeeperClient] Error getting device approvals:', error.message);
+      log.error('Error getting device approvals', error.message);
       return [];
     }
   }
@@ -662,24 +674,24 @@ class KeeperClient {
 
   async _executeCommandAsync(command, maxWait = 15) {
     try {
-      console.log('[KeeperClient] Executing:', command);
+      log.debug('Executing command', command);
       
       const response = await this.client.post('/executecommand-async', { command });
       
       if (response.status !== 202) {
-        console.error('[KeeperClient] Command submission failed:', response.status);
+        log.error('Command submission failed', response.status);
         return null;
       }
       
       const requestId = response.data?.request_id;
       if (!requestId) {
-        console.error('[KeeperClient] No request_id in response');
+        log.error('No request_id in response');
         return null;
       }
       
       return await this._pollForResult(requestId, maxWait);
     } catch (error) {
-      console.error('[KeeperClient] Command execution error:', error.message);
+      log.error('Command execution error', error.message);
       return null;
     }
   }
@@ -700,7 +712,7 @@ class KeeperClient {
           if (status === 'success') {
             return result;
           } else if (status === 'error') {
-            console.error('[KeeperClient] Command failed:', result.message);
+            log.error('Command failed', result.message);
             return result;
           }
         } else if (response.status === 400) {
@@ -717,13 +729,13 @@ class KeeperClient {
           elapsed += pollInterval;
           pollInterval = Math.min(pollInterval * 1.5, maxPollInterval);
         } else {
-          console.error('[KeeperClient] Polling error:', error.message);
+          log.error('Polling error', error.message);
           return null;
         }
       }
     }
     
-    console.warn('[KeeperClient] Polling timed out after ' + maxWait + ' seconds');
+    log.warn('Polling timed out after ' + maxWait + ' seconds');
     return null;
   }
 
@@ -813,6 +825,30 @@ class KeeperClient {
     return message;
   }
 
+  /**
+   * Check if the share command result indicates an invitation was sent
+   * (user doesn't have a Keeper account yet)
+   */
+  _isInvitationSent(message) {
+    if (!message) return false;
+    
+    if (Array.isArray(message)) {
+      message = message.join('\n');
+    }
+    
+    const lower = message.toLowerCase();
+    
+    // Common indicators that an invitation was sent instead of immediate share
+    return lower.includes('invitation') || 
+           lower.includes('invite') ||
+           lower.includes('pending share') ||
+           lower.includes('not a keeper user') ||
+           lower.includes('does not have') ||
+           lower.includes('user not found') ||
+           lower.includes('email will be sent') ||
+           lower.includes('share pending');
+  }
+
   _sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -823,7 +859,7 @@ let keeperClient;
 try {
   keeperClient = new KeeperClient();
 } catch (error) {
-  console.warn('[KeeperClient] Could not initialize with config, creating with defaults');
+  log.warn('Could not initialize with config, creating with defaults');
   keeperClient = {
     healthCheck: async () => false,
     searchRecords: async () => [],

@@ -7,6 +7,9 @@
 const axios = require('axios');
 const { ManagedIdentityCredential, ClientSecretCredential } = require('@azure/identity');
 const config = require('../config');
+const { createLogger } = require('./logger');
+
+const log = createLogger('GraphService');
 
 class GraphService {
   constructor() {
@@ -28,7 +31,7 @@ class GraphService {
       
       if (clientSecret && config.MicrosoftAppTenantId) {
         // Local development: Use Client Secret
-        console.log('[GraphService] Using ClientSecretCredential for local development');
+        log.debug('Using ClientSecretCredential for local development');
         this.credential = new ClientSecretCredential(
           config.MicrosoftAppTenantId,
           config.MicrosoftAppId,
@@ -36,7 +39,7 @@ class GraphService {
         );
       } else {
         // Production: Use Managed Identity
-        console.log('[GraphService] Using ManagedIdentityCredential for production');
+        log.debug('Using ManagedIdentityCredential for production');
         this.credential = new ManagedIdentityCredential({
           clientId: config.MicrosoftAppId,
         });
@@ -57,11 +60,11 @@ class GraphService {
     
     // Return cached token if still valid (with 5 minute buffer)
     if (cachedToken && expiry && Date.now() < expiry - 300000) {
-      console.log('[GraphService] Using cached token');
+      log.debug('Using cached token');
       return cachedToken;
     }
 
-    console.log('[GraphService] Acquiring new access token...');
+    log.debug('Acquiring new access token...');
     try {
       const credential = this.getCredential();
       // Client credentials flow (ClientSecretCredential) MUST use .default scope
@@ -80,15 +83,15 @@ class GraphService {
           // For delegated permissions, check 'scp' field
           const roles = payload.roles || [];
           const scopesInToken = payload.scp || [];
-          console.log('[GraphService] Token roles (application permissions):', roles.length > 0 ? roles : 'None');
-          console.log('[GraphService] Token scopes (delegated permissions):', scopesInToken.length > 0 ? scopesInToken : 'None');
+          log.debug('Token roles (application permissions)', roles.length > 0 ? roles : 'None');
+          log.debug('Token scopes (delegated permissions)', scopesInToken.length > 0 ? scopesInToken : 'None');
           if (roles.length === 0 && scopesInToken.length === 0) {
-            console.warn('[GraphService] WARNING: Token has no roles or scopes!');
+            log.warn('Token has no roles or scopes!');
           }
         }
       } catch (decodeError) {
         // Ignore decode errors, just for debugging
-        console.log('[GraphService] Could not decode token for debugging');
+        log.debug('Could not decode token for debugging');
       }
 
       // Cache the token (tokens typically expire in 1 hour)
@@ -96,10 +99,10 @@ class GraphService {
       this.tokenCache.set(cacheKey, tokenResponse.token);
       this.tokenExpiry.set(cacheKey, Date.now() + expiresIn);
 
-      console.log('[GraphService] Successfully acquired access token');
+      log.debug('Successfully acquired access token');
       return tokenResponse.token;
     } catch (error) {
-      console.error('[GraphService] Error getting access token:', error.message);
+      log.error('Error getting access token', error.message);
       throw error;
     }
   }
@@ -139,7 +142,7 @@ class GraphService {
         } catch (error) {
           // If we get 403, it might be a stale token - clear cache and retry once
           if (error.response?.status === 403 && retryCount < maxRetries) {
-            console.log('[GraphService] Got 403 (Authorization denied), clearing token cache and retrying...');
+            log.debug('Got 403 (Authorization denied), clearing token cache and retrying...');
             this.tokenCache.delete(cacheKey);
             this.tokenExpiry.delete(cacheKey);
             retryCount++;
@@ -169,10 +172,10 @@ class GraphService {
         }
       } catch (error) {
         // If we've exhausted retries or it's not a 403, throw the error
-        console.error('[GraphService] Error fetching user:', error.message);
+        log.error('Error fetching user', error.message);
         if (error.response) {
-          console.error('[GraphService] Response status:', error.response.status);
-          console.error('[GraphService] Response data:', error.response.data);
+          log.error('Response status', error.response.status);
+          log.error('Response data', error.response.data);
         }
         throw error;
       }
@@ -195,7 +198,7 @@ class GraphService {
       // Prefer mail over userPrincipalName (mail is the primary email)
       return user.mail || user.userPrincipalName || null;
     } catch (error) {
-      console.error('[GraphService] Error getting user email:', error.message);
+      log.error('Error getting user email', error.message);
       return null;
     }
   }
@@ -208,7 +211,7 @@ class GraphService {
     const cacheKey = tenantId || 'default';
     this.tokenCache.delete(cacheKey);
     this.tokenExpiry.delete(cacheKey);
-    console.log('[GraphService] Token cache cleared for:', cacheKey);
+    log.debug('Token cache cleared for', cacheKey);
   }
 }
 

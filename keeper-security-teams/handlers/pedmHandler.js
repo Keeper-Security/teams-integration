@@ -12,6 +12,9 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
+const { createLogger } = require('../services');
+
+const log = createLogger('PedmHandler');
 
 /**
  * Get approver info from activity
@@ -88,7 +91,7 @@ async function handlePedmApproval(context, data) {
     };
   }
   
-  console.log('[PEDM Handler] Approving request:', approvalUid);
+  log.debug('Approving request', approvalUid);
   
   const result = await keeperClient.approvePedmRequest(approvalUid);
   
@@ -103,7 +106,7 @@ async function handlePedmApproval(context, data) {
     );
   } else if (result.already_processed) {
     // Return "already processed" card
-    console.log('[PEDM Handler] Request already processed:', approvalUid);
+    log.debug('Request already processed', approvalUid);
     return buildAlreadyProcessedCard(username, approvalUid);
   } else {
     // Return error card
@@ -153,7 +156,7 @@ async function handlePedmDenial(context, data) {
     };
   }
   
-  console.log('[PEDM Handler] Denying request:', approvalUid);
+  log.debug('Denying request', approvalUid);
   
   const result = await keeperClient.denyPedmRequest(approvalUid);
   
@@ -168,7 +171,7 @@ async function handlePedmDenial(context, data) {
     );
   } else if (result.already_processed) {
     // Return "already processed" card
-    console.log('[PEDM Handler] Request already processed:', approvalUid);
+    log.debug('Request already processed', approvalUid);
     return buildAlreadyProcessedCard(username, approvalUid);
   } else {
     // Return error card

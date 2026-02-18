@@ -28,6 +28,7 @@ const {
   buildRecordConfirmationCard,
   buildRecordCreationCard,
   buildRecordCreatedCard,
+  buildRecordInvitationSentCard,
 } = require('./approval/recordRequestCards');
 
 // Import folder cards
@@ -36,6 +37,7 @@ const {
   buildFolderSearchResultsCard,
   buildFolderApprovalCardWithStatus,
   buildFolderConfirmationCard,
+  buildFolderInvitationSentCard,
 } = require('./approval/folderRequestCards');
 
 // Import share cards
@@ -57,12 +59,14 @@ module.exports = {
   buildRecordSearchResultsCard,
   buildRecordCreationCard,
   buildRecordCreatedCard,
+  buildRecordInvitationSentCard,
   
   // Folder cards
   buildFolderApprovalCard,
   buildFolderApprovalCardWithStatus,
   buildFolderConfirmationCard,
   buildFolderSearchResultsCard,
+  buildFolderInvitationSentCard,
   
   // Share cards
   buildShareSearchResultsCard,

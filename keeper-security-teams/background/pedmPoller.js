@@ -6,9 +6,11 @@
  */
 
 const keeperClient = require('../services/keeperClient');
-const { getChannelService } = require('../services');
+const { getChannelService, createLogger } = require('../services');
 const cards = require('../cards');
 const config = require('../config');
+
+const log = createLogger('PedmPoller');
 
 /**
  * Parse PEDM request data from API response
@@ -82,11 +84,11 @@ class PedmPoller {
    */
   start() {
     if (!this.enabled) {
-      console.log('[PEDM Poller] Disabled in config');
+      log.info('Disabled in config');
       return;
     }
 
-    console.log('[PEDM Poller] Starting with interval: ' + this.interval + 'ms');
+    log.info(`Starting with interval: ${this.interval}ms`);
     
     // Run immediately on start
     this.poll();
@@ -105,7 +107,7 @@ class PedmPoller {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      console.log('[PEDM Poller] Stopped');
+      log.info('Stopped');
     }
   }
 
@@ -113,28 +115,28 @@ class PedmPoller {
    * Poll for pending PEDM requests
    */
   async poll() {
-    console.log('[PEDM Poller] Polling for pending requests...');
+    log.debug('Polling for pending requests...');
     
     try {
       const requests = await keeperClient.getPendingPedmRequests();
       
       if (!requests || requests.length === 0) {
-        console.log('[PEDM Poller] No pending requests');
+        log.debug('No pending requests');
         return;
       }
       
-      console.log('[PEDM Poller] Found ' + requests.length + ' pending requests');
+      log.debug(`Found ${requests.length} pending requests`);
       
       for (const request of requests) {
         const requestId = request.approval_uid || request.approvalUid || request.id;
         
         if (!requestId) {
-          console.log('[PEDM Poller] Skipping request without ID');
+          log.debug('Skipping request without ID');
           continue;
         }
         
         if (this.processedRequests.has(requestId)) {
-          console.log('[PEDM Poller] Already processed: ' + requestId);
+          log.debug('Already processed', requestId);
           continue;
         }
         
@@ -142,7 +144,7 @@ class PedmPoller {
         this.processedRequests.set(requestId, Date.now());
       }
     } catch (error) {
-      console.error('[PEDM Poller] Error polling:', error.message);
+      log.error('Error polling', error.message);
     }
   }
 
@@ -153,13 +155,8 @@ class PedmPoller {
     // Parse the request to extract fields from arrays
     const request = parsePedmRequest(rawRequest);
     
-    console.log('[PEDM Poller] Posting card for: ' + request.approvalUid);
-    console.log('[PEDM Poller] Parsed request:', JSON.stringify({
-      approvalUid: request.approvalUid,
-      username: request.username,
-      approvalType: request.approvalType,
-      agentUid: request.agentUid,
-    }));
+    log.debug('Posting card for', request.approvalUid);
+    log.debug('Parsed request', { approvalUid: request.approvalUid, username: request.username, agentUid: request.agentUid });
     
     const card = cards.buildPedmApprovalCard({
       approvalUid: request.approvalUid,
@@ -185,17 +182,16 @@ class PedmPoller {
       );
       
       if (sent) {
-        console.log('[PEDM Poller] Card posted to approvals channel: ' + request.approvalUid);
+        log.debug('Card posted to approvals channel', request.approvalUid);
         this.consecutiveErrors = 0;
         return true;
       } else {
-        console.warn('[PEDM Poller] Failed to post card to channel: ' + request.approvalUid);
+        log.warn('Failed to post card to channel', request.approvalUid);
         this.consecutiveErrors++;
         return false;
       }
     } else {
-      console.warn('[PEDM Poller] Approvals channel not ready - card not sent');
-      console.warn('[PEDM Poller] Send a message in the approvals channel to initialize');
+      log.warn('Approvals channel not ready - card not sent');
       return false;
     }
   }
@@ -215,7 +211,7 @@ class PedmPoller {
     }
     
     if (cleaned > 0) {
-      console.log('[PEDM Poller] Cleaned up ' + cleaned + ' old entries');
+      log.debug(`Cleaned up ${cleaned} old entries`);
     }
   }
 }

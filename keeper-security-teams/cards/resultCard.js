@@ -18,7 +18,7 @@ function buildApprovalResultCard({
   expiresAt,
   reason,
 }) {
-  const icon = approved ? '✅' : '❌';
+  const icon = approved ? 'Approved' : 'Denied';
   const title = approved ? 'Access Request Approved' : 'Access Request Denied';
   const color = approved ? 'Good' : 'Attention';
   
@@ -204,7 +204,7 @@ function buildSearchResultsCard({
   query,
   results,
 }) {
-  const icon = searchType === 'folder' ? '📁' : '🔐';
+  const icon = searchType === 'folder' ? 'Folder' : 'Record';
   const title = searchType === 'folder' ? 'Folder Search Results' : 'Record Search Results';
   
   const resultItems = results.map(item => {
@@ -215,7 +215,7 @@ function buildSearchResultsCard({
           {
             type: 'Column',
             width: 'auto',
-            items: [{ type: 'TextBlock', text: '📁' }],
+            items: [{ type: 'TextBlock', text: '[Folder]' }],
           },
           {
             type: 'Column',
@@ -294,7 +294,7 @@ function buildHelpCard() {
               {
                 type: 'Column',
                 width: 'auto',
-                items: [{ type: 'TextBlock', text: '🔐', size: 'ExtraLarge' }],
+                items: [{ type: 'TextBlock', text: '[Secure]', size: 'ExtraLarge' }],
               },
               {
                 type: 'Column',
@@ -326,7 +326,7 @@ function buildHelpCard() {
       {
         type: 'Container',
         items: [
-          { type: 'TextBlock', text: '🔍 Search', weight: 'Bolder', color: 'Accent' },
+          { type: 'TextBlock', text: 'Search', weight: 'Bolder', color: 'Accent' },
           { type: 'TextBlock', text: '• `search-records <query>` - Search records', wrap: true },
           { type: 'TextBlock', text: '• `search-folders <query>` - Search folders', wrap: true },
         ],
@@ -334,7 +334,7 @@ function buildHelpCard() {
       {
         type: 'Container',
         items: [
-          { type: 'TextBlock', text: '⚙️ Other', weight: 'Bolder', color: 'Accent' },
+          { type: 'TextBlock', text: 'Other', weight: 'Bolder', color: 'Accent' },
           { type: 'TextBlock', text: '• `status` - Check connection', wrap: true },
           { type: 'TextBlock', text: '• `help` - Show this help', wrap: true },
         ],
@@ -362,7 +362,7 @@ function buildErrorCard(title, message) {
               {
                 type: 'Column',
                 width: 'auto',
-                items: [{ type: 'TextBlock', text: '❌', size: 'Large' }],
+                items: [{ type: 'TextBlock', text: 'X', size: 'Large', color: 'Attention' }],
               },
               {
                 type: 'Column',
@@ -404,7 +404,7 @@ function buildApprovedMessageCard(approverName, permission, duration, itemName, 
               {
                 type: 'Column',
                 width: 'auto',
-                items: [{ type: 'TextBlock', text: '✅', size: 'Large' }],
+                items: [{ type: 'TextBlock', text: '+', size: 'Large', color: 'Good' }],
               },
               {
                 type: 'Column',
@@ -454,7 +454,7 @@ function buildDeniedMessageCard(approverName, reason, itemName, itemType) {
               {
                 type: 'Column',
                 width: 'auto',
-                items: [{ type: 'TextBlock', text: '❌', size: 'Large' }],
+                items: [{ type: 'TextBlock', text: 'X', size: 'Large', color: 'Attention' }],
               },
               {
                 type: 'Column',
@@ -501,8 +501,22 @@ function formatPermission(permission) {
 }
 
 function formatDate(dateStr) {
+  if (!dateStr) return 'N/A';
+  
+  // Handle permanent/non-date strings
+  if (typeof dateStr === 'string') {
+    const lower = dateStr.toLowerCase();
+    if (lower.includes('permanent') || lower.includes('never') || lower === 'n/a') {
+      return 'Access granted indefinitely';
+    }
+  }
+  
   try {
     const date = new Date(dateStr);
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return dateStr;
+    }
     return date.toLocaleString('en-US', {
       month: '2-digit',
       day: '2-digit',

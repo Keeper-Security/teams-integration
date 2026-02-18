@@ -12,6 +12,9 @@ const fs = require('fs');
 const path = require('path');
 const { MicrosoftAppCredentials, ConnectorClient } = require('botframework-connector');
 const config = require('../config');
+const { createLogger } = require('./logger');
+
+const log = createLogger('ChannelService');
 
 // ==================== Persistent Storage ====================
 
@@ -24,7 +27,7 @@ const REFERENCES_FILE = path.join(DATA_DIR, 'conversationReferences.json');
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    console.log('[ChannelService] Created data directory');
+    log.info('Created data directory');
   }
 }
 
@@ -42,11 +45,11 @@ function loadReferencesFromFile() {
       for (const [key, ref] of Object.entries(refs)) {
         expanded[key] = expandReference(ref);
       }
-      console.log(`[ChannelService] Loaded ${Object.keys(expanded).length} conversation references from file`);
+      log.info(`Loaded ${Object.keys(expanded).length} conversation references from file`);
       return expanded;
     }
   } catch (error) {
-    console.error('[ChannelService] Error loading references from file:', error.message);
+    log.error('Error loading references from file', error.message);
   }
   return {};
 }
@@ -103,9 +106,9 @@ function saveReferencesToFile(references) {
     }
     const data = JSON.stringify(minimized, null, 2);
     fs.writeFileSync(REFERENCES_FILE, data, 'utf8');
-    console.log('[ChannelService] Saved conversation references to file');
+    log.debug('Saved conversation references to file');
   } catch (error) {
-    console.error('[ChannelService] Error saving references to file:', error.message);
+    log.error('Error saving references to file', error.message);
   }
 }
 
@@ -165,7 +168,7 @@ function storeApprovalStatus(approvalId, statusData) {
     ...statusData,
     updatedAt: new Date().toISOString(),
   });
-  console.log(`[ChannelService] Stored approval status for ${approvalId}: ${statusData.status}`);
+  log.debug(`Stored approval status for ${approvalId}: ${statusData.status}`);
 }
 
 /**
@@ -193,7 +196,7 @@ function isApprovalProcessed(approvalId) {
  */
 function storeConversationReference(key, reference) {
   conversationReferences.set(key, reference);
-  console.log(`[ChannelService] Stored conversation reference for: ${key}`);
+  log.debug(`Stored conversation reference for: ${key}`);
   
   // Persist to file (only for important keys like 'approvals')
   if (key === 'approvals' || key.startsWith('user:')) {
@@ -209,7 +212,7 @@ function storeConversationReference(key, reference) {
  */
 function storeApprovalActivityId(approvalId, activityId) {
   approvalActivityMap.set(approvalId, activityId);
-  console.log(`[ChannelService] Stored activity ID for approval ${approvalId}: ${activityId}`);
+  log.debug(`Stored activity ID for approval ${approvalId}: ${activityId}`);
 }
 
 /**
@@ -310,7 +313,7 @@ class ChannelService {
     if (!key) {
       if (isApprovalsChannel(activity)) {
         key = 'approvals';
-        console.log('[ChannelService] Captured APPROVALS channel reference');
+        log.info('Captured approvals channel reference');
       } else if (isTeamsChannel(activity)) {
         key = activity.channelData?.teamsChannelId || activity.conversation?.id;
       } else {
@@ -333,7 +336,7 @@ class ChannelService {
     if (userId && !isTeamsChannel(activity)) {
       const reference = extractConversationReference(activity);
       storeConversationReference(`user:${userId}`, reference);
-      console.log(`[ChannelService] Captured user reference: ${userId}`);
+      log.debug(`Captured user reference: ${userId}`);
     }
   }
 
@@ -346,8 +349,7 @@ class ChannelService {
     const approvalsRef = getConversationReference('approvals');
     
     if (!approvalsRef) {
-      console.warn('[ChannelService] No approvals channel reference stored.');
-      console.warn('[ChannelService] Send a message to the approvals channel to initialize.');
+      log.warn('No approvals channel reference stored. Send a message to the approvals channel to initialize.');
       return false;
     }
 
@@ -363,12 +365,12 @@ class ChannelService {
    */
   async sendToChannel(reference, message) {
     if (!this.app) {
-      console.error('[ChannelService] App not initialized');
+      log.error('App not initialized');
       return false;
     }
 
     if (!reference || !reference.conversation || !reference.conversation.id) {
-      console.error('[ChannelService] Invalid conversation reference');
+      log.error('Invalid conversation reference');
       return false;
     }
 
@@ -401,11 +403,10 @@ class ChannelService {
       
       await this.app.send(conversationId, activity);
       
-      console.log('[ChannelService] Message sent successfully via app.send()');
+      log.debug('Message sent successfully via app.send()');
       return true;
     } catch (error) {
-      console.error('[ChannelService] Error sending message:', error.message);
-      console.error('[ChannelService] Error details:', error.stack);
+      log.error('Error sending message', { message: error.message, stack: error.stack });
       return false;
     }
   }
@@ -444,12 +445,12 @@ class ChannelService {
     const approvalsRef = getConversationReference('approvals');
     
     if (!approvalsRef) {
-      console.warn('[ChannelService] No approvals channel reference stored.');
+      log.warn('No approvals channel reference stored.');
       return { success: false, activityId: null };
     }
 
     if (!this.app) {
-      console.error('[ChannelService] App not initialized');
+      log.error('App not initialized');
       return { success: false, activityId: null };
     }
 
@@ -471,9 +472,7 @@ class ChannelService {
       const conversationId = approvalsRef.conversation.id;
       const response = await this.app.send(conversationId, activity);
       
-      // Log the response to see what we get back
-      console.log('[ChannelService] app.send() response:', JSON.stringify(response));
-      console.log('[ChannelService] app.send() response type:', typeof response);
+      log.debug('app.send() response', { response, type: typeof response });
       
       // Try to extract activity ID from response
       let activityId = null;
@@ -486,30 +485,27 @@ class ChannelService {
           activityId = response.activityId;
         }
         
-        // Fallback: Extract messageid from conversation.id
-        // Format: "19:xxx@thread.tacv2;messageid=1770017086743"
         if (!activityId && response.conversation?.id) {
           const match = response.conversation.id.match(/messageid=(\d+)/);
           if (match) {
             activityId = match[1];
-            console.log('[ChannelService] Extracted activityId from conversation.id:', activityId);
+            log.debug('Extracted activityId from conversation.id', activityId);
           }
         }
       }
       
-      console.log('[ChannelService] Final extracted activityId:', activityId);
+      log.debug('Final extracted activityId', activityId);
       
-      // Store the mapping of approvalId -> activityId for later updates
       if (approvalId && activityId) {
         storeApprovalActivityId(approvalId, activityId);
-        console.log(`[ChannelService] Stored activity mapping: ${approvalId} -> ${activityId}`);
+        log.debug(`Stored activity mapping: ${approvalId} -> ${activityId}`);
       } else {
-        console.warn('[ChannelService] Could not store activity mapping - no activityId returned');
+        log.warn('Could not store activity mapping - no activityId returned');
       }
       
       return { success: true, activityId: activityId };
     } catch (error) {
-      console.error('[ChannelService] Error sending via app.send():', error.message);
+      log.error('Error sending via app.send()', error.message);
       return { success: false, activityId: null };
     }
   }
@@ -524,27 +520,21 @@ class ChannelService {
     const approvalsRef = getConversationReference('approvals');
     
     if (!approvalsRef || !approvalsRef.serviceUrl) {
-      console.error('[ChannelService] Missing approvals reference or serviceUrl');
+      log.error('Missing approvals reference or serviceUrl');
       return false;
     }
 
     if (!this.app) {
-      console.error('[ChannelService] App not initialized for update');
+      log.error('App not initialized for update');
       return false;
     }
 
-    // Get the base conversation ID (without messageid suffix)
     let conversationId = approvalsRef.conversation.id;
-    // Remove any ";messageid=xxx" suffix if present
     if (conversationId.includes(';messageid=')) {
       conversationId = conversationId.split(';messageid=')[0];
     }
 
-    console.log('[ChannelService] Attempting update:', {
-      serviceUrl: approvalsRef.serviceUrl,
-      conversationId,
-      activityId,
-    });
+    log.debug('Attempting update', { conversationId, activityId });
 
     try {
       // Build the updated activity
@@ -557,22 +547,17 @@ class ChannelService {
         }],
       };
 
-      // Try using the app's API client first
-      // The API client should use the same auth mechanism as app.send()
       if (this.app.api && this.app.api.conversations) {
-        console.log('[ChannelService] Using app.api.conversations for update');
+        log.debug('Using app.api.conversations for update');
         const result = await this.app.api.conversations.activities(conversationId).update(
           activityId,
           activity
         );
-        console.log('[ChannelService] Activity updated via Teams SDK API, activityId:', activityId);
-        console.log('[ChannelService] Update result:', JSON.stringify(result));
+        log.debug('Activity updated via Teams SDK API', { activityId, result });
         return true;
       }
       
-      // Fallback: Try using the app's client directly
-      // Create an API client with the correct service URL and the app's HTTP client
-      console.log('[ChannelService] app.api.conversations not available, trying direct client');
+      log.debug('app.api.conversations not available, trying direct client');
       const { Client: ApiClient } = require('@microsoft/teams.api');
       const apiClient = new ApiClient(approvalsRef.serviceUrl, this.app.client);
       
@@ -581,16 +566,13 @@ class ChannelService {
         activity
       );
       
-      console.log('[ChannelService] Activity updated via direct API client, activityId:', activityId);
-      console.log('[ChannelService] Update result:', JSON.stringify(result));
+      log.debug('Activity updated via direct API client', { activityId, result });
       return true;
     } catch (error) {
-      console.error('[ChannelService] Error updating activity:', error.message);
-      console.error('[ChannelService] Error stack:', error.stack);
+      log.error('Error updating activity', { message: error.message, stack: error.stack });
       
-      // Last resort: Try using the ConnectorClient
       try {
-        console.log('[ChannelService] Trying ConnectorClient as last resort');
+        log.debug('Trying ConnectorClient as last resort');
         const client = getConnectorClient(approvalsRef.serviceUrl);
         
         const fullActivity = {
@@ -612,10 +594,10 @@ class ChannelService {
           fullActivity
         );
         
-        console.log('[ChannelService] Activity updated via ConnectorClient (last resort)');
+        log.debug('Activity updated via ConnectorClient (last resort)');
         return true;
       } catch (connectorError) {
-        console.error('[ChannelService] ConnectorClient also failed:', connectorError.message);
+        log.error('ConnectorClient also failed', connectorError.message);
         return false;
       }
     }
@@ -631,7 +613,7 @@ class ChannelService {
     const userRef = getConversationReference(`user:${userId}`);
     
     if (!userRef) {
-      console.warn(`[ChannelService] No reference for user: ${userId}`);
+      log.warn(`No reference for user: ${userId}`);
       return false;
     }
 
@@ -674,7 +656,7 @@ let channelServiceInstance = null;
 function initializeChannelService(app) {
   if (!channelServiceInstance) {
     channelServiceInstance = new ChannelService(app);
-    console.log('[ChannelService] Initialized');
+    log.info('Channel service initialized');
   }
   return channelServiceInstance;
 }

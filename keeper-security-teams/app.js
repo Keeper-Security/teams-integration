@@ -13,7 +13,9 @@ const { ManagedIdentityCredential } = require("@azure/identity");
 const config = require("./config");
 const handlers = require("./handlers");
 const { PedmPoller, DevicePoller } = require("./background");
-const { initializeChannelService, getChannelService, isApprovalsChannel } = require("./services");
+const { initializeChannelService, getChannelService, isApprovalsChannel, createLogger } = require("./services");
+
+const log = createLogger('KeeperBot');
 
 // Create storage for conversation state
 const storage = new LocalStorage();
@@ -72,22 +74,20 @@ const getConversationState = (conversationId) => {
 app.on("message", async (context) => {
   const activity = context.activity;
   
-  // Check if this is a card action (Action.Submit sends data in activity.value)
   if (activity.value && activity.value.action) {
     const data = activity.value;
     const action = data.action;
     
-    console.log(`[Keeper Bot] Card action in message:`, JSON.stringify(data));
+    log.debug('Card action in message', data);
     
-    // Handle approval/denial actions
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
       try {
-        console.log(`[Keeper Bot] Routing ${action}`);
+        log.debug(`Routing ${action}`);
         await handlers.routeApprovalAction(context, data);
-        console.log(`[Keeper Bot] Action ${action} completed`);
+        log.debug(`Action ${action} completed`);
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling ${action}:`, error);
-        await context.send(`❌ Error: ${error.message}`);
+        log.error(`Error handling ${action}`, error);
+        await context.send(`Error: ${error.message}`);
       }
       return;
     }
@@ -100,14 +100,13 @@ app.on("message", async (context) => {
     return;
   }
 
-  console.log(`[Keeper Bot] Received message: "${text}"`);
+  log.debug(`Received message: "${text}"`);
 
   // ==================== Capture Conversation References ====================
   
-  // Capture reference for approvals channel (needed for proactive messaging)
   if (isApprovalsChannel(activity)) {
     channelService.captureConversationReference(context, 'approvals');
-    console.log('[Keeper Bot] Captured approvals channel reference');
+    log.info('Captured approvals channel reference');
   }
   
   // Capture user reference for DMs (1:1 chats)
@@ -155,14 +154,14 @@ app.on("message", async (context) => {
     const canSend = status.approvalsChannelReady && status.appReady;
     await context.send(
       `**Channel Service Status**\n\n` +
-      `• Approvals Channel Configured: ${status.approvalsChannelConfigured ? '✅ Yes' : '❌ No'}\n` +
+      `• Approvals Channel Configured: ${status.approvalsChannelConfigured ? 'Yes' : 'No'}\n` +
       `• Approvals Channel ID: \`${status.approvalsChannelId}\`\n` +
-      `• Approvals Channel Ready: ${status.approvalsChannelReady ? '✅ Yes' : '❌ No'}\n` +
-      `• App Ready: ${status.appReady ? '✅ Yes' : '❌ No'}\n` +
+      `• Approvals Channel Ready: ${status.approvalsChannelReady ? 'Yes' : 'No'}\n` +
+      `• App Ready: ${status.appReady ? 'Yes' : 'No'}\n` +
       `• Stored References: ${status.storedReferences.join(', ') || 'None'}\n\n` +
       (canSend
-        ? '✅ Approval routing is active. Requests will be sent to the approvals channel.'
-        : '⚠️ To enable approval routing, send a message in the approvals channel first.')
+        ? 'Approval routing is active. Requests will be sent to the approvals channel.'
+        : 'To enable approval routing, send a message in the approvals channel first.')
     );
     return;
   }
@@ -208,15 +207,14 @@ app.on("conversationUpdate", async (context) => {
   );
   
   if (botAdded) {
-    console.log('[Keeper Bot] Bot added to conversation');
+    log.info('Bot added to conversation');
     
-    // Check if this is the approvals channel - auto-capture reference
     if (isApprovalsChannel(activity)) {
       channelService.captureConversationReference(context, 'approvals');
-      console.log('[Keeper Bot] Auto-captured approvals channel reference on install');
+      log.info('Auto-captured approvals channel reference on install');
       
       // Send welcome message to approvals channel
-      await context.send('✅ **Keeper Security Bot** is now active in this approvals channel.\n\nAccess requests will appear here for review.');
+      await context.send('**Keeper Security Bot** is now active in this approvals channel.\n\nAccess requests will appear here for review.');
     }
     
     // Capture user reference for DMs (1:1 chats)
@@ -232,25 +230,17 @@ app.on("invoke", async (context) => {
   const activity = context.activity;
   const invokeName = activity.name;
   
-  console.log('[Keeper Bot] Invoke activity:', invokeName, JSON.stringify(activity.value));
+  log.debug('Invoke activity', { name: invokeName, value: activity.value });
   
   // Handle task/fetch (opening task module)
   if (invokeName === 'task/fetch') {
     try {
       const { handleTaskFetch } = require('./handlers/taskModuleHandler');
-      // Pass the full activity - handleTaskFetch will extract the data
       const response = await handleTaskFetch(context, activity);
-      console.log('[Keeper Bot] Task module response type:', typeof response);
-      console.log('[Keeper Bot] Task module response keys:', response ? Object.keys(response) : 'null');
-      if (response && response.task) {
-        console.log('[Keeper Bot] Task type:', response.task.type);
-        console.log('[Keeper Bot] Task value keys:', response.task.value ? Object.keys(response.task.value) : 'null');
-      }
-      console.log('[Keeper Bot] Full task module response:', JSON.stringify(response, null, 2));
+      log.debug('Task module response', response);
       return response;
     } catch (error) {
-      console.error('[Keeper Bot] Error handling task/fetch:', error);
-      console.error('[Keeper Bot] Error stack:', error.stack);
+      log.error('Error handling task/fetch', { message: error.message, stack: error.stack });
       return {
         task: {
           type: 'message',
@@ -260,15 +250,14 @@ app.on("invoke", async (context) => {
     }
   }
   
-  // Handle task/submit (submitting task module)
   if (invokeName === 'task/submit') {
     try {
       const { handleTaskSubmit } = require('./handlers/taskModuleHandler');
       const response = await handleTaskSubmit(context, activity);
-      console.log('[Keeper Bot] Task module submit response:', JSON.stringify(response).substring(0, 200));
+      log.debug('Task module submit response');
       return response;
     } catch (error) {
-      console.error('[Keeper Bot] Error handling task/submit:', error);
+      log.error('Error handling task/submit', error.message);
       return {
         task: {
           type: 'message',
@@ -278,25 +267,22 @@ app.on("invoke", async (context) => {
     }
   }
   
-  // Handle adaptiveCard/action (Action.Execute from Adaptive Cards)
   if (invokeName === 'adaptiveCard/action') {
-    console.log('[Keeper Bot] adaptiveCard/action invoke received');
+    log.debug('adaptiveCard/action invoke received');
     const verb = activity.value?.action?.verb;
     const data = activity.value?.action?.data || activity.value?.data || activity.value || {};
     const action = data.action || verb;
     
-    console.log('[Keeper Bot] Action verb:', verb);
-    console.log('[Keeper Bot] Action data:', JSON.stringify(data));
+    log.debug('Action', { verb, action });
     
-    // Handle refresh action - return the correct card based on approval status
     if (verb === 'refreshApprovalCard') {
       try {
-        console.log('[Keeper Bot] Processing refresh for approval:', data.approvalId);
+        log.debug('Processing refresh for approval', data.approvalId);
         const { handleRefreshApprovalCard } = require('./handlers/approvalHandler');
         const updatedCard = await handleRefreshApprovalCard(data);
         
         if (updatedCard) {
-          console.log('[Keeper Bot] Returning refreshed card for approval:', data.approvalId);
+          log.debug('Returning refreshed card for approval', data.approvalId);
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
@@ -304,22 +290,20 @@ app.on("invoke", async (context) => {
           };
         }
         
-        // No status change, return empty to keep original card
-        console.log('[Keeper Bot] No status change, keeping original card');
+        log.debug('No status change, keeping original card');
         return { statusCode: 200 };
       } catch (error) {
-        console.error('[Keeper Bot] Error refreshing approval card:', error);
-        return { statusCode: 200 }; // Return 200 to avoid error display
+        log.error('Error refreshing approval card', error);
+        return { statusCode: 200 };
       }
     }
     
-    // Handle inline lookup actions (search from the card itself)
     if (verb === 'lookup_record' || verb === 'lookup_folder' || verb === 'lookup_share') {
       try {
         const searchQuery = activity.value?.action?.data?.searchQuery || 
                             activity.value?.data?.searchQuery ||
                             data.searchQuery || '';
-        console.log(`[Keeper Bot] Processing ${verb} for query:`, searchQuery);
+        log.debug(`Processing ${verb} for query: ${searchQuery}`);
         const { handleInlineLookup } = require('./handlers/approvalHandler');
         const resultCard = await handleInlineLookup(verb, data, searchQuery);
         
@@ -329,15 +313,14 @@ app.on("invoke", async (context) => {
           value: resultCard,
         };
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling ${verb}:`, error);
+        log.error(`Error handling ${verb}`, error);
         return { statusCode: 500, body: error.message };
       }
     }
     
-    // Handle reset card actions (return to original approval card)
     if (verb === 'reset_record_card' || verb === 'reset_folder_card' || verb === 'reset_share_card') {
       try {
-        console.log(`[Keeper Bot] Processing ${verb} - resetting to original card`);
+        log.debug(`Processing ${verb} - resetting to original card`);
         const { handleResetCard } = require('./handlers/approvalHandler');
         const originalCard = handleResetCard(verb, data);
         
@@ -347,15 +330,14 @@ app.on("invoke", async (context) => {
           value: originalCard,
         };
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling ${verb}:`, error);
+        log.error(`Error handling ${verb}`, error);
         return { statusCode: 500, body: error.message };
       }
     }
     
-    // Handle show_create_form (show inline create record form)
     if (verb === 'show_create_form') {
       try {
-        console.log(`[Keeper Bot] Processing show_create_form`);
+        log.debug('Processing show_create_form');
         const { handleShowCreateForm } = require('./handlers/approvalHandler');
         const createFormCard = handleShowCreateForm(data);
         
@@ -365,16 +347,14 @@ app.on("invoke", async (context) => {
           value: createFormCard,
         };
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling show_create_form:`, error);
+        log.error('Error handling show_create_form', error);
         return { statusCode: 500, body: error.message };
       }
     }
     
-    // Handle submit_create_record (create record and show with approval options)
-    // Uses fire-and-forget pattern: return "Processing" card immediately, then update via proactive messaging
     if (verb === 'submit_create_record') {
       try {
-        console.log(`[Keeper Bot] Processing submit_create_record - START`);
+        log.debug('Processing submit_create_record - START');
         
         // Extract form data
         const recordTitle = activity.value?.action?.data?.recordTitle || data.recordTitle || '';
@@ -397,7 +377,7 @@ app.on("invoke", async (context) => {
           if (!recordLogin?.trim()) errors.push('Login is required');
           const errorMessage = errors.join('. ');
           
-          console.log(`[Keeper Bot] Validation failed: ${errorMessage}`);
+          log.debug(`Validation failed: ${errorMessage}`);
           
           const cards = require('./cards');
           return {
@@ -429,7 +409,7 @@ app.on("invoke", async (context) => {
         
         (async () => {
           try {
-            console.log(`[Keeper Bot] Background: Starting record creation${selfDestructEnabled ? ` (self-destruct: ${selfDestructDuration})` : ''}`);
+            log.debug(`Background: Starting record creation${selfDestructEnabled ? ` (self-destruct: ${selfDestructDuration})` : ''}`);
             const keeperClient = require('./services/keeperClient');
             const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
             
@@ -443,7 +423,7 @@ app.on("invoke", async (context) => {
               selfDestructDuration: selfDestructDuration,
             });
             
-            console.log(`[Keeper Bot] Background: Record creation complete`, result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
+            log.debug('Background: Record creation complete', result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
             
             // Build the result card with permission and duration dropdowns
             const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('./cards/constants');
@@ -546,7 +526,6 @@ app.on("invoke", async (context) => {
               };
             }
             
-            // Send new message with result using channelService
             if (channelService && channelService.isApprovalsChannelReady()) {
               try {
                 const sent = await channelService.sendApprovalCardViaConnector(
@@ -554,20 +533,19 @@ app.on("invoke", async (context) => {
                   data.approvalId || 'create-record',
                   result.success ? `Record "${recordTitle.trim()}" created successfully!` : null
                 );
-                console.log(`[Keeper Bot] Background: Sent result card via channelService:`, sent.success);
+                log.debug('Background: Sent result card via channelService', sent.success);
               } catch (sendError) {
-                console.error(`[Keeper Bot] Background: Error sending via channelService:`, sendError.message);
+                log.error('Background: Error sending via channelService', sendError.message);
               }
             } else {
-              console.error(`[Keeper Bot] Background: ChannelService not available for proactive messaging`);
+              log.error('Background: ChannelService not available for proactive messaging');
             }
           } catch (bgError) {
-            console.error(`[Keeper Bot] Background: Error in record creation:`, bgError.message);
+            log.error('Background: Error in record creation', bgError.message);
           }
         })();
         
-        // Return "Processing" card immediately (within Teams timeout)
-        console.log(`[Keeper Bot] Returning processing card immediately`);
+        log.debug('Returning processing card immediately');
         return {
           statusCode: 200,
           type: 'application/vnd.microsoft.card.adaptive',
@@ -584,16 +562,14 @@ app.on("invoke", async (context) => {
           },
         };
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling submit_create_record:`, error);
-        console.error(`[Keeper Bot] Error stack:`, error.stack);
+        log.error('Error handling submit_create_record', { message: error.message, stack: error.stack });
         return { statusCode: 500, body: error.message };
       }
     }
     
-    // Handle cancel_create_form (return to search results card)
     if (verb === 'cancel_create_form') {
       try {
-        console.log(`[Keeper Bot] Processing cancel_create_form`);
+        log.debug('Processing cancel_create_form');
         const { handleCancelCreateForm } = require('./handlers/approvalHandler');
         const searchCard = await handleCancelCreateForm(data);
         
@@ -603,7 +579,7 @@ app.on("invoke", async (context) => {
           value: searchCard,
         };
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling cancel_create_form:`, error);
+        log.error('Error handling cancel_create_form', error);
         return { statusCode: 500, body: error.message };
       }
     }
@@ -623,7 +599,7 @@ app.on("invoke", async (context) => {
                         data.duration || '1h';
         
         if (!selectedRecordJson) {
-          console.error('[Keeper Bot] No record selected');
+          log.error('No record selected');
           return { statusCode: 400, body: 'No record selected' };
         }
         
@@ -631,11 +607,11 @@ app.on("invoke", async (context) => {
         try {
           selectedRecord = JSON.parse(selectedRecordJson);
         } catch (e) {
-          console.error('[Keeper Bot] Failed to parse selected record:', e);
+          log.error('Failed to parse selected record', e);
           return { statusCode: 400, body: 'Invalid record selection' };
         }
         
-        console.log(`[Keeper Bot] Approving selected record:`, selectedRecord);
+        log.debug('Approving selected record', selectedRecord);
         
         // Build the data for approval
         const approvalData = {
@@ -660,12 +636,11 @@ app.on("invoke", async (context) => {
         
         return { statusCode: 200 };
       } catch (error) {
-        console.error('[Keeper Bot] Error handling approve_selected_record:', error);
+        log.error('Error handling approve_selected_record', error);
         return { statusCode: 500, body: error.message };
       }
     }
     
-    // Handle approve_selected_folder (when multiple folders were found)
     if (verb === 'approve_selected_folder') {
       try {
         // Extract selected folder from input field
@@ -680,7 +655,7 @@ app.on("invoke", async (context) => {
                         data.duration || '1h';
         
         if (!selectedFolderJson) {
-          console.error('[Keeper Bot] No folder selected');
+          log.error('No folder selected');
           return { statusCode: 400, body: 'No folder selected' };
         }
         
@@ -688,11 +663,11 @@ app.on("invoke", async (context) => {
         try {
           selectedFolder = JSON.parse(selectedFolderJson);
         } catch (e) {
-          console.error('[Keeper Bot] Failed to parse selected folder:', e);
+          log.error('Failed to parse selected folder', e);
           return { statusCode: 400, body: 'Invalid folder selection' };
         }
         
-        console.log(`[Keeper Bot] Approving selected folder:`, selectedFolder);
+        log.debug('Approving selected folder', selectedFolder);
         
         // Build the data for approval
         const approvalData = {
@@ -717,12 +692,11 @@ app.on("invoke", async (context) => {
         
         return { statusCode: 200 };
       } catch (error) {
-        console.error('[Keeper Bot] Error handling approve_selected_folder:', error);
+        log.error('Error handling approve_selected_folder', error);
         return { statusCode: 500, body: error.message };
       }
     }
     
-    // Handle approve_selected_share (when multiple records were found for one-time share)
     if (verb === 'approve_selected_share') {
       try {
         // Extract selected record from input field
@@ -737,7 +711,7 @@ app.on("invoke", async (context) => {
                         data.editable || 'false';
         
         if (!selectedRecordJson) {
-          console.error('[Keeper Bot] No record selected for share');
+          log.error('No record selected for share');
           return { statusCode: 400, body: 'No record selected' };
         }
         
@@ -745,11 +719,11 @@ app.on("invoke", async (context) => {
         try {
           selectedRecord = JSON.parse(selectedRecordJson);
         } catch (e) {
-          console.error('[Keeper Bot] Failed to parse selected record:', e);
+          log.error('Failed to parse selected record', e);
           return { statusCode: 400, body: 'Invalid record selection' };
         }
         
-        console.log(`[Keeper Bot] Creating one-time share for selected record:`, selectedRecord);
+        log.debug('Creating one-time share for selected record', selectedRecord);
         
         // Build the data for share approval
         const approvalData = {
@@ -774,21 +748,19 @@ app.on("invoke", async (context) => {
         
         return { statusCode: 200 };
       } catch (error) {
-        console.error('[Keeper Bot] Error handling approve_selected_share:', error);
+        log.error('Error handling approve_selected_share', error);
         return { statusCode: 500, body: error.message };
       }
     }
     
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
       try {
-        console.log(`[Keeper Bot] Processing ${action} from adaptiveCard/action (Universal Action)`);
+        log.debug(`Processing ${action} from adaptiveCard/action (Universal Action)`);
         
-        // Check if this is a PEDM/EPM action
         if (action.includes('pedm')) {
-          // EPM actions return a card directly for in-place update
           const resultCard = await handlers.routePedmAction(context, data);
           if (resultCard) {
-            console.log(`[Keeper Bot] EPM action ${action} completed, updating card in-place`);
+            log.debug(`EPM action ${action} completed, updating card in-place`);
             return {
               statusCode: 200,
               type: 'application/vnd.microsoft.card.adaptive',
@@ -798,12 +770,10 @@ app.on("invoke", async (context) => {
           return { statusCode: 200 };
         }
         
-        // Check if this is a Device Approval action
         if (action.includes('device')) {
-          // Device actions return a card directly for in-place update
           const resultCard = await handlers.routeDeviceAction(context, data);
           if (resultCard) {
-            console.log(`[Keeper Bot] Device action ${action} completed, updating card in-place`);
+            log.debug(`Device action ${action} completed, updating card in-place`);
             return {
               statusCode: 200,
               type: 'application/vnd.microsoft.card.adaptive',
@@ -813,12 +783,10 @@ app.on("invoke", async (context) => {
           return { statusCode: 200 };
         }
         
-        // Call the handler and get the updated card for other approval types
         const result = await handlers.routeApprovalActionWithCardResponse(context, data);
         
-        console.log(`[Keeper Bot] Action ${action} completed, returning updated card`);
+        log.debug(`Action ${action} completed, returning updated card`);
         
-        // Return the updated card - Teams will automatically update the original card
         if (result && result.updatedCard) {
           return {
             statusCode: 200,
@@ -827,17 +795,15 @@ app.on("invoke", async (context) => {
           };
         }
         
-        // Fallback: just acknowledge
         return { statusCode: 200 };
       } catch (error) {
-        console.error(`[Keeper Bot] Error handling ${action}:`, error);
+        log.error(`Error handling ${action}`, error);
         return { statusCode: 500, body: error.message };
       }
     }
   }
   
-  // Log any unhandled invoke names for debugging
-  console.log('[Keeper Bot] Unhandled invoke name:', invokeName);
+  log.debug('Unhandled invoke name', invokeName);
   
   // Return undefined to let other handlers process
   return undefined;
@@ -845,18 +811,17 @@ app.on("invoke", async (context) => {
 
 // ==================== Task Module Handler ====================
 
-// Handle task/fetch - Show task module UI (legacy handler, kept for compatibility)
 app.on("task/fetch", async (context) => {
   const activity = context.activity;
   
-  console.log('[Keeper Bot] Task module fetch (legacy):', JSON.stringify(activity.value));
+  log.debug('Task module fetch (legacy)', activity.value);
   
   try {
     const { handleTaskFetch } = require('./handlers/taskModuleHandler');
     const response = await handleTaskFetch(context, activity);
     return response;
   } catch (error) {
-    console.error('[Keeper Bot] Error handling task/fetch:', error);
+    log.error('Error handling task/fetch', error);
     return {
       task: {
         type: 'message',
@@ -866,18 +831,17 @@ app.on("task/fetch", async (context) => {
   }
 });
 
-// Handle task/submit - Process task module submission (legacy handler, kept for compatibility)
 app.on("task/submit", async (context) => {
   const activity = context.activity;
   
-  console.log('[Keeper Bot] Task module submit (legacy):', JSON.stringify(activity.value));
+  log.debug('Task module submit (legacy)', activity.value);
   
   try {
     const { handleTaskSubmit } = require('./handlers/taskModuleHandler');
     const response = await handleTaskSubmit(context, activity);
     return response;
   } catch (error) {
-    console.error('[Keeper Bot] Error handling task/submit:', error);
+    log.error('Error handling task/submit', error);
     return {
       task: {
         type: 'message',
@@ -887,45 +851,34 @@ app.on("task/submit", async (context) => {
   }
 });
 
-// ==================== Card Action Handler ====================
-
-// Handle Adaptive Card action submissions
 app.on("cardAction", async (context) => {
   const activity = context.activity;
   const data = activity.value || {};
   
-  console.log(`[Keeper Bot] Card action received:`, JSON.stringify(data));
+  log.debug('Card action received', data);
 
   const action = data.action;
 
   if (!action) {
-    console.log('[Keeper Bot] No action in card data, skipping');
+    log.debug('No action in card data, skipping');
     return;
   }
 
-  // If this action has msteams.task/fetch, it will be handled by invoke handler
-  // Don't intercept it here - let Teams convert it to an invoke activity
   if (data.msteams && data.msteams.type === 'task/fetch') {
-    console.log('[Keeper Bot] Task module request detected in cardAction, should be handled by invoke handler');
-    // Return undefined to let the invoke handler process it
-    // Teams will convert this to an invoke activity automatically
+    log.debug('Task module request detected in cardAction, should be handled by invoke handler');
     return undefined;
   }
 
-  // Route to appropriate handler based on action type
   try {
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
-      console.log(`[Keeper Bot] Routing approval/denial action: ${action}`);
-      // Approval/denial actions
+      log.debug(`Routing approval/denial action: ${action}`);
       if (action.includes('record') || action.includes('folder') || action.includes('share')) {
         await handlers.routeApprovalAction(context, data);
-        console.log(`[Keeper Bot] Action ${action} completed`);
+        log.debug(`Action ${action} completed`);
       } else if (action.includes('pedm')) {
-        // EPM actions return a card for in-place update
         const resultCard = await handlers.routePedmAction(context, data);
         if (resultCard) {
-          console.log(`[Keeper Bot] EPM action ${action} completed, updating card in-place`);
-          // Return card for in-place update
+          log.debug(`EPM action ${action} completed, updating card in-place`);
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
@@ -933,11 +886,9 @@ app.on("cardAction", async (context) => {
           };
         }
       } else if (action.includes('device')) {
-        // Device actions return a card for in-place update
         const resultCard = await handlers.routeDeviceAction(context, data);
         if (resultCard) {
-          console.log(`[Keeper Bot] Device action ${action} completed, updating card in-place`);
-          // Return card for in-place update
+          log.debug(`Device action ${action} completed, updating card in-place`);
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
@@ -946,10 +897,10 @@ app.on("cardAction", async (context) => {
         }
       }
     } else {
-      console.log(`[Keeper Bot] Unknown action: ${action}`);
+      log.debug(`Unknown action: ${action}`);
     }
   } catch (error) {
-    console.error(`[Keeper Bot] Error handling card action:`, error);
+    log.error('Error handling card action', error);
     await context.send(`Error processing action: ${error.message}`);
   }
 });
@@ -960,18 +911,17 @@ app.on("cardAction", async (context) => {
 let pedmPoller = null;
 let devicePoller = null;
 
-// Start pollers after app is ready
 const startPollers = () => {
   if (config.pedm.enabled) {
     pedmPoller = new PedmPoller(app);
     pedmPoller.start();
-    console.log('[Keeper Bot] EPM poller started');
+    log.info('EPM poller started');
   }
 
   if (config.deviceApproval.enabled) {
     devicePoller = new DevicePoller(app);
     devicePoller.start();
-    console.log('[Keeper Bot] Device approval poller started');
+    log.info('Device approval poller started');
   }
 };
 
@@ -981,31 +931,28 @@ const stopPollers = () => {
   if (devicePoller) devicePoller.stop();
 };
 
-// Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.log('[Keeper Bot] Shutting down...');
+  log.info('Shutting down...');
   stopPollers();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('[Keeper Bot] Shutting down...');
+  log.info('Shutting down...');
   stopPollers();
   process.exit(0);
 });
 
 // ==================== App Ready Hook ====================
 
-// Extend the start method to initialize pollers and check connectivity
 const originalStart = app.start.bind(app);
 app.start = async (...args) => {
   const result = await originalStart(...args);
   
-  console.log('\n' + '='.repeat(60));
-  console.log('Starting Keeper Commander Teams Bot');
-  console.log('='.repeat(60));
+  log.info('='.repeat(60));
+  log.info('Starting Keeper Commander Teams Bot');
+  log.info('='.repeat(60));
   
-  // Check Keeper Service Mode connectivity
   const keeperClient = require('./services/keeperClient');
   const serviceUrl = config.keeper?.serviceUrl || process.env.KEEPER_SERVICE_URL || 'http://localhost:3001/api/v2/';
   
@@ -1013,25 +960,19 @@ app.start = async (...args) => {
     const isHealthy = await keeperClient.healthCheck();
     
     if (isHealthy) {
-      console.log('[Keeper Bot] ✓ Keeper Service Mode is accessible');
+      log.info('Keeper Service Mode is accessible');
     } else {
-      console.warn('[Keeper Bot] ⚠ Cannot reach Keeper Service Mode');
-      console.warn(`   URL: ${serviceUrl}`);
-      console.warn('   The bot will start but commands may fail.');
+      log.warn(`Cannot reach Keeper Service Mode at ${serviceUrl}. The bot will start but commands may fail.`);
     }
   } catch (error) {
-    console.warn('[Keeper Bot] ⚠ Cannot reach Keeper Service Mode');
-    console.warn(`   URL: ${serviceUrl}`);
-    console.warn(`   Error: ${error.message}`);
-    console.warn('   The bot will start but commands may fail.');
+    log.warn(`Cannot reach Keeper Service Mode at ${serviceUrl}. Error: ${error.message}. The bot will start but commands may fail.`);
   }
   
-  console.log('='.repeat(60) + '\n');
+  log.info('='.repeat(60));
   
-  // Start background pollers after app is running
   setTimeout(() => {
     startPollers();
-  }, 2000); // Delay to ensure app is fully initialized
+  }, 2000);
   
   return result;
 };
