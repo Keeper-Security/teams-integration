@@ -10,6 +10,7 @@ const {
   buildFoundItemsHeader,
   formatFolderPermissionLabel 
 } = require('../cardHelpers');
+const { sanitizeHyperlinks } = require('../../utils/helpers');
 
 /**
  * Build an Adaptive Card for folder access approval request
@@ -29,6 +30,10 @@ function buildFolderApprovalCard({
 }) {
   const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
   
+  // Sanitize identifier and justification to prevent URL injection
+  const safeIdentifier = sanitizeHyperlinks(identifier || folderName);
+  const safeJustification = sanitizeHyperlinks(justification) || 'No justification provided';
+  
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -45,7 +50,7 @@ function buildFolderApprovalCard({
               { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
               { type: 'TextBlock', text: requesterName, color: 'Warning', size: 'Medium' },
               { type: 'TextBlock', text: 'Folder:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-              { type: 'TextBlock', text: identifier || folderName, color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: safeIdentifier, color: 'Warning', size: 'Medium' },
               { type: 'TextBlock', text: 'Requested:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
               { type: 'TextBlock', text: requestedTime, size: 'Medium' },
             ],
@@ -57,7 +62,7 @@ function buildFolderApprovalCard({
               { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
               { type: 'TextBlock', text: approvalId, color: 'Warning', size: 'Medium' },
               { type: 'TextBlock', text: 'Justification:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-              { type: 'TextBlock', text: justification || 'No justification provided', wrap: true, size: 'Medium' },
+              { type: 'TextBlock', text: safeJustification, wrap: true, size: 'Medium' },
             ],
           },
         ],
@@ -69,6 +74,8 @@ function buildFolderApprovalCard({
   if (isUid) {
     // Add refresh property only when UID is resolved (not in search mode)
     // This prevents input field values from resetting during action execution
+    // Refresh property enables auto-refresh for all users when message is edited
+    // Omitting userIds enables auto-refresh for ALL users in channels with <60 members
     card.refresh = {
       action: {
         type: 'Action.Execute',
@@ -86,7 +93,6 @@ function buildFolderApprovalCard({
           isUid,
         },
       },
-      userIds: [],
     };
     
     // Add Folder Details section when UID is resolved
@@ -246,13 +252,27 @@ function buildFolderApprovalCardWithStatus({
   folderName,
   justification,
   status,
+  statusMessage,
   approverName,
   permission,
   duration,
   expiresAt,
   processedTime,
 }) {
-  const statusText = status === 'approved' ? 'APPROVED' : 'DENIED';
+  let statusText;
+  let containerStyle;
+  
+  if (status === 'approved') {
+    statusText = 'APPROVED';
+    containerStyle = 'good';
+  } else if (status === 'owner') {
+    statusText = statusMessage || 'USER ALREADY HAS FULL ACCESS';
+    containerStyle = 'warning';
+  } else {
+    statusText = 'DENIED';
+    containerStyle = 'attention';
+  }
+  
   const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
   
   const card = {
@@ -288,9 +308,9 @@ function buildFolderApprovalCardWithStatus({
       },
       {
         type: 'Container',
-        style: status === 'approved' ? 'good' : 'attention',
+        style: containerStyle,
         items: [
-          { type: 'TextBlock', text: statusText, weight: 'Bolder', size: 'Large', horizontalAlignment: 'Center' },
+          { type: 'TextBlock', text: statusText, weight: 'Bolder', size: 'Large', horizontalAlignment: 'Center', wrap: true },
           { type: 'TextBlock', text: `By: ${approverName || 'Unknown'} at ${time}`, size: 'Small', horizontalAlignment: 'Center', isSubtle: true },
         ],
       },
@@ -354,6 +374,35 @@ function buildFolderApprovalCardWithStatus({
     if (detailsItems.length > 0) {
       card.body.splice(2, 0, { type: 'Container', spacing: 'Medium', items: detailsItems });
     }
+  } else if (status === 'owner') {
+    const ownerDetailsItems = [
+      {
+        type: 'TextBlock',
+        text: 'The selected user already has full permissions on this folder.',
+        wrap: true,
+        size: 'Small',
+        spacing: 'Small',
+      },
+      {
+        type: 'TextBlock',
+        text: 'No action is needed - the user already has complete access.',
+        wrap: true,
+        size: 'Small',
+        isSubtle: true,
+      },
+    ];
+    
+    if (requesterEmail) {
+      ownerDetailsItems.unshift({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'User:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: requesterEmail, size: 'Small' }] },
+        ],
+      });
+    }
+    
+    card.body.splice(2, 0, { type: 'Container', spacing: 'Medium', items: ownerDetailsItems });
   }
   
   return card;

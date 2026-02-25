@@ -11,6 +11,7 @@ const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
 const config = require('../config');
 const { getChannelService, getApprovalActivityId, removeApprovalActivityId, getApprovalStatus, storeApprovalStatus, createLogger } = require('../services');
+const { isPermissionConflictError, isRecordOwnerError, isPamRecordError } = require('../utils/helpers');
 
 const log = createLogger('ApprovalHandler');
 
@@ -125,6 +126,73 @@ function buildInvitationNotificationCard({ recordTitle, itemType, permission, ap
 }
 
 /**
+ * Build notification card for approver when permission conflict occurs
+ * (user already has conflicting access that needs to be revoked first)
+ */
+function buildPermissionConflictCard({ itemTitle, itemType, requesterName, requesterEmail, requestedPermission, errorMessage }) {
+  const itemLabel = itemType === 'folder' ? 'Folder' : 'Record';
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { 
+        type: 'TextBlock', 
+        text: 'Permission Conflict', 
+        weight: 'Bolder', 
+        size: 'Large',
+        color: 'Attention'
+      },
+      {
+        type: 'TextBlock',
+        text: `The approval could not be completed due to an existing permission conflict.`,
+        wrap: true,
+        spacing: 'Medium'
+      },
+      {
+        type: 'FactSet',
+        spacing: 'Medium',
+        facts: [
+          { title: `${itemLabel}:`, value: itemTitle || 'Unknown' },
+          { title: 'Requester:', value: `${requesterName} (${requesterEmail})` },
+          { title: 'Requested Permission:', value: requestedPermission || 'N/A' },
+        ],
+      },
+      {
+        type: 'Container',
+        style: 'attention',
+        spacing: 'Medium',
+        items: [
+          { type: 'TextBlock', text: 'Action Required:', weight: 'Bolder', size: 'Medium' },
+          { 
+            type: 'TextBlock', 
+            text: `The user already has existing access to this ${itemLabel.toLowerCase()} that conflicts with the requested permission.`,
+            size: 'Small',
+            wrap: true 
+          },
+          { 
+            type: 'TextBlock', 
+            text: `To grant the new permission, you must first revoke their existing access using Keeper Commander or the Keeper web vault, then approve the request again.`,
+            size: 'Small',
+            wrap: true 
+          },
+        ],
+      },
+      {
+        type: 'TextBlock',
+        text: `**Error details:** ${errorMessage || 'Permission conflict detected'}`,
+        wrap: true,
+        spacing: 'Medium',
+        size: 'Small',
+        isSubtle: true
+      },
+    ],
+    actions: [],
+  };
+}
+
+/**
  * Get approver info from activity
  */
 function getApproverInfo(activity) {
@@ -136,108 +204,59 @@ function getApproverInfo(activity) {
 }
 
 /**
- * Helper function to update an approval card using the context's activity info
- * This uses the context directly since it has the right service URL and permissions
+ * Helper function to update an approval card in the channel
+ * Uses context.updateActivity() directly for reliable message updates
+ * When the message is edited, Teams auto-refreshes the card for all users
  * @param {string} approvalId - The approval request ID
  * @param {Object} updatedCard - The updated Adaptive Card content
- * @param {Object} context - The Teams context (required)
+ * @param {Object} context - The Teams context
  */
 async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
-  if (!context || !context.activity) {
-    throw new Error('Context with activity is required for updates');
-  }
-
-  const activity = context.activity;
-  
-  // Get activity ID - try stored first, then replyToId
-  let activityId = getApprovalActivityId(approvalId);
-  
-  if (!activityId && activity.replyToId) {
-    log.debug(`Using replyToId as fallback: ${activity.replyToId}`);
-    activityId = activity.replyToId;
-  }
+  // Get the activity ID - prefer replyToId (the card being interacted with)
+  const activityId = context?.activity?.replyToId || getApprovalActivityId(approvalId);
   
   if (!activityId) {
     log.debug(`No activity ID found for approval ${approvalId}`);
     throw new Error('No activity ID found for this approval');
   }
 
-  // Get conversation ID - remove any messageid suffix
-  let conversationId = activity.conversation?.id;
-  if (conversationId && conversationId.includes(';messageid=')) {
-    conversationId = conversationId.split(';messageid=')[0];
-  }
+  log.debug(`Updating approval ${approvalId}`, { activityId, hasContext: !!context });
 
-  // Get service URL from the context's activity
-  const serviceUrl = activity.serviceUrl;
-
-  if (!conversationId || !serviceUrl) {
-    throw new Error('Missing conversation ID or service URL from context');
-  }
-
-  log.debug(`Updating approval ${approvalId}`, { activityId });
-
-  // Build the updated activity
-  const updatedActivity = {
-    type: 'message',
-    id: activityId,
-    attachments: [{
-      contentType: 'application/vnd.microsoft.card.adaptive',
-      content: updatedCard,
-    }],
-  };
-
-  // Try multiple methods to update the activity
-  
-  // Method 1: Try using context's send with the updated activity (replace behavior)
-  // Some SDKs support this pattern
-  if (typeof context.updateActivity === 'function') {
+  // Method 1: Try context.updateActivity() directly (most reliable in invoke handlers)
+  if (context && typeof context.updateActivity === 'function') {
     try {
-      await context.updateActivity(updatedActivity);
-      log.debug('Updated via context.updateActivity');
+      const updateActivity = {
+        type: 'message',
+        id: activityId,
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      };
+      
+      await context.updateActivity(updateActivity);
       removeApprovalActivityId(approvalId);
+      log.info('Updated card via context.updateActivity()', { activityId });
       return true;
-    } catch (e) {
-      log.debug('context.updateActivity failed', e.message);
+    } catch (contextError) {
+      log.debug('context.updateActivity() not available or failed', contextError.message);
     }
   }
 
-  // Method 2: Try using the channel service with context info
+  // Method 2: Fallback to channel service with ConnectorClient
   const channelService = getChannelService();
-  if (channelService && channelService.app) {
-    try {
-      // Create API client with the context's service URL
-      const { Client: ApiClient } = require('@microsoft/teams.api');
-      const apiClient = new ApiClient(serviceUrl, channelService.app.client);
-      
-      const result = await apiClient.conversations.activities(conversationId).update(
-        activityId,
-        updatedActivity
-      );
-      
-      log.debug('Updated via ApiClient with context serviceUrl');
-      removeApprovalActivityId(approvalId);
-      return true;
-    } catch (e) {
-      log.debug('ApiClient update failed', e.message);
-    }
+  if (!channelService) {
+    throw new Error('Channel service not available');
   }
 
-  // Method 3: Try using the channel service's updateApprovalCard as last resort
-  if (channelService) {
-    try {
-      const success = await channelService.updateApprovalCard(activityId, updatedCard);
-      if (success) {
-        removeApprovalActivityId(approvalId);
-        log.debug('Updated via channelService');
-        return true;
-      }
-    } catch (e) {
-      log.debug('channelService.updateApprovalCard failed', e.message);
-    }
+  const success = await channelService.updateApprovalCard(activityId, updatedCard);
+  if (success) {
+    removeApprovalActivityId(approvalId);
+    log.info('Updated card via channelService', { activityId });
+    return true;
   }
 
-  throw new Error('All update methods failed');
+  throw new Error('Failed to update channel card');
 }
 
 /**
@@ -376,7 +395,95 @@ async function handleRecordApproval(context, data) {
       }
     }
   } else {
-    await context.send('Failed to grant access: ' + result.error);
+    // Check if this is a permission conflict error
+    if (isPermissionConflictError(result.error)) {
+      log.info('Permission conflict detected for record approval', { recordUid, requesterEmail, error: result.error });
+      
+      // Send DM to approver explaining the conflict
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const conflictCard = buildPermissionConflictCard({
+            itemTitle: recordTitle,
+            itemType: 'record',
+            requesterName: requesterName,
+            requesterEmail: requesterEmail,
+            requestedPermission: permission,
+            errorMessage: result.error,
+          });
+          
+          await channelService.sendDirectMessage(approver.id, {
+            type: 'message',
+            attachments: [{
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: conflictCard,
+            }],
+          });
+          log.debug('Sent permission conflict notification to approver');
+        }
+      } catch (notifyError) {
+        log.error('Error sending conflict notification to approver', notifyError.message);
+      }
+      
+      // Don't update the card - leave it active for retry after resolving conflict
+      // The approval card remains unchanged so the approver can try again
+    } else if (isRecordOwnerError(result.error) || result.isOwnerError) {
+      log.info('Record owner error detected', { recordUid, requesterEmail });
+      
+      // Send DM to approver explaining the owner issue
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const ownerErrorCard = {
+            type: 'AdaptiveCard',
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            version: '1.4',
+            body: [
+              { type: 'TextBlock', text: 'Access Grant Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+              { type: 'TextBlock', text: `The selected user is the current **owner** of this record and already has full permissions.`, wrap: true, spacing: 'Medium' },
+              { type: 'FactSet', spacing: 'Medium', facts: [
+                { title: 'Request ID:', value: approvalId || 'N/A' },
+                { title: 'Record:', value: recordTitle },
+                { title: 'Requester:', value: `${requesterName} (${requesterEmail})` },
+              ]},
+              { type: 'TextBlock', text: 'No action is needed - the user already has full access to this record.', wrap: true, spacing: 'Medium', isSubtle: true },
+            ],
+          };
+          
+          await channelService.sendDirectMessage(approver.id, {
+            type: 'message',
+            attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: ownerErrorCard }],
+          });
+          log.debug('Sent owner error notification to approver');
+        }
+      } catch (notifyError) {
+        log.error('Error sending owner notification to approver', notifyError.message);
+      }
+      
+      // Update the approval card to show the user already has full access
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const ownerStatusCard = cards.buildRecordApprovalCardWithStatus({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        recordTitle: recordTitle,
+        justification: justification,
+        status: 'owner',
+        statusMessage: 'User Already Has Full Access (Owner)',
+        approverName: approver.name,
+        permission: permission,
+      });
+      
+      try {
+        await tryUpdateApprovalCard(approvalId, ownerStatusCard, context);
+        log.debug('Updated approval card with owner status');
+      } catch (updateError) {
+        log.debug('Failed to update card, sending message instead', updateError.message);
+        await context.send(`Cannot modify permissions: ${requesterEmail} is the owner of this record and already has full access.`);
+      }
+    } else {
+      await context.send('Failed to grant access: ' + result.error);
+    }
   }
 }
 
@@ -591,7 +698,96 @@ async function handleFolderApproval(context, data) {
       }
     }
   } else {
-    await context.send('Failed to grant folder access: ' + result.error);
+    // Check if user already has full access (manage_all) and cannot be downgraded - check FIRST
+    if (result.isFullAccessError) {
+      log.info('Folder full access error detected', { folderUid, requesterEmail });
+      
+      // Send DM to approver explaining the situation
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const fullAccessErrorCard = {
+            type: 'AdaptiveCard',
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            version: '1.4',
+            body: [
+              { type: 'TextBlock', text: 'Permission Change Not Allowed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+              { type: 'TextBlock', text: `The selected user already has **Manage Users and Records** permission on this folder and cannot be downgraded.`, wrap: true, spacing: 'Medium' },
+              { type: 'FactSet', spacing: 'Medium', facts: [
+                { title: 'Request ID:', value: approvalId || 'N/A' },
+                { title: 'Folder:', value: folderName },
+                { title: 'Requester:', value: `${requesterName} (${requesterEmail})` },
+              ]},
+              { type: 'TextBlock', text: 'The user already has full access to this folder. No action is needed.', wrap: true, spacing: 'Medium', isSubtle: true },
+            ],
+          };
+          
+          await channelService.sendDirectMessage(approver.id, {
+            type: 'message',
+            attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: fullAccessErrorCard }],
+          });
+          log.debug('Sent full access error notification to approver');
+        }
+      } catch (notifyError) {
+        log.error('Error sending full access notification to approver', notifyError.message);
+      }
+      
+      // Update the approval card to show the user already has full access
+      const fullAccessCard = cards.buildFolderApprovalCardWithStatus({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        folderName: folderName,
+        justification: justification,
+        status: 'owner',
+        statusMessage: 'User Already Has Full Access (Cannot Downgrade)',
+        approverName: approver.name,
+        permission: permission,
+      });
+      
+      try {
+        await tryUpdateApprovalCard(approvalId, fullAccessCard, context);
+        log.debug('Updated approval card with full access status');
+      } catch (updateError) {
+        log.debug('Failed to update card, sending message instead', updateError.message);
+        await context.send(`Cannot modify permissions: ${requesterEmail} already has "Manage Users and Records" permission and cannot be downgraded.`);
+      }
+    } else if (isPermissionConflictError(result.error)) {
+      log.info('Permission conflict detected for folder approval', { folderUid, requesterEmail, error: result.error });
+      
+      // Send DM to approver explaining the conflict
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const conflictCard = buildPermissionConflictCard({
+            itemTitle: folderName,
+            itemType: 'folder',
+            requesterName: requesterName,
+            requesterEmail: requesterEmail,
+            requestedPermission: permission,
+            errorMessage: result.error,
+          });
+          
+          await channelService.sendDirectMessage(approver.id, {
+            type: 'message',
+            attachments: [{
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: conflictCard,
+            }],
+          });
+          log.debug('Sent permission conflict notification to approver');
+        }
+      } catch (notifyError) {
+        log.error('Error sending conflict notification to approver', notifyError.message);
+      }
+      
+      // Don't update the card - leave it active for retry after resolving conflict
+    } else if (isRecordOwnerError(result.error)) {
+      log.info('Folder owner error detected', { folderUid, requesterEmail });
+      await context.send(`Cannot grant access: ${requesterEmail} is the owner of this folder.`);
+    } else {
+      await context.send('Failed to grant folder access: ' + result.error);
+    }
   }
 }
 
@@ -714,7 +910,41 @@ async function handleShareApproval(context, data) {
       }],
     });
   } else {
-    await context.send('Failed to create share link: ' + result.error);
+    // Check if this is a permission conflict error (rare for one-time shares but possible)
+    if (isPermissionConflictError(result.error)) {
+      log.info('Permission conflict detected for one-time share', { recordUid, error: result.error });
+      
+      // Send DM to approver explaining the conflict
+      try {
+        const channelService = getChannelService();
+        if (channelService) {
+          const conflictCard = buildPermissionConflictCard({
+            itemTitle: recordTitle,
+            itemType: 'record',
+            requesterName: requesterName,
+            requesterEmail: 'N/A (One-Time Share)',
+            requestedPermission: editable ? 'Editable Share' : 'View-Only Share',
+            errorMessage: result.error,
+          });
+          
+          await channelService.sendDirectMessage(approver.id, {
+            type: 'message',
+            attachments: [{
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: conflictCard,
+            }],
+          });
+          log.debug('Sent permission conflict notification to approver for one-time share');
+        }
+      } catch (notifyError) {
+        log.error('Error sending conflict notification to approver', notifyError.message);
+      }
+    } else if (isPamRecordError(result.error)) {
+      log.info('PAM record error detected for one-time share', { recordUid, error: result.error });
+      await context.send(`**One-Time Share Not Available**\n\nThe record \`${recordTitle}\` is a PAM record.\n\nOne-Time Shares are currently not available for PAM records. The requester should use \`keeper-request-record\` to request direct access instead.`);
+    } else {
+      await context.send('Failed to create share link: ' + result.error);
+    }
   }
 }
 
@@ -868,6 +1098,41 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
+        // Check if this is an owner error
+        if (result.isOwnerError || isRecordOwnerError(result.error)) {
+          log.info('Record owner error detected in Universal Action', { recordUid, requesterEmail });
+          
+          // Build owner status card
+          const ownerStatusCard = cards.buildRecordApprovalCardWithStatus({
+            approvalId,
+            requesterName,
+            requesterEmail,
+            recordTitle,
+            justification: data.justification || '',
+            status: 'owner',
+            statusMessage: 'User Already Has Full Access (Owner)',
+            approverName: approver.name,
+            permission,
+            processedTime,
+          });
+          
+          // Update the channel card for all users
+          try {
+            await tryUpdateApprovalCard(approvalId, ownerStatusCard, context);
+            log.debug('Updated channel card with owner status');
+          } catch (updateError) {
+            log.debug('Could not update channel card', updateError.message);
+          }
+          
+          return { updatedCard: ownerStatusCard };
+        }
+        
+        // Check for permission conflict
+        if (isPermissionConflictError(result.error)) {
+          log.info('Permission conflict detected in Universal Action', { recordUid, requesterEmail, error: result.error });
+          return { error: result.error, keepCardActive: true };
+        }
+        
         log.error('Failed to grant access', result.error);
         return { error: result.error };
       }
@@ -972,6 +1237,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
         }
       }
       
+      // Update the channel card for all users
+      try {
+        await tryUpdateApprovalCard(approvalId, updatedCard, context);
+        log.debug('Updated channel card with approved status');
+      } catch (updateError) {
+        log.debug('Could not update channel card', updateError.message);
+      }
+      
       return { updatedCard };
     }
     
@@ -1003,6 +1276,68 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
+        // Check if user already has full access (manage_all) and cannot be downgraded - check FIRST
+        if (result.isFullAccessError) {
+          log.info('Folder full access error detected in Universal Action', { folderUid, requesterEmail });
+          
+          const fullAccessCard = cards.buildFolderApprovalCardWithStatus({
+            approvalId,
+            requesterName,
+            requesterEmail,
+            folderName,
+            justification: data.justification || '',
+            status: 'owner',
+            statusMessage: 'User Already Has Full Access (Cannot Downgrade)',
+            approverName: approver.name,
+            permission,
+            processedTime,
+          });
+          
+          // Update the channel card for all users
+          try {
+            await tryUpdateApprovalCard(approvalId, fullAccessCard, context);
+            log.debug('Updated channel card with full access status');
+          } catch (updateError) {
+            log.debug('Could not update channel card', updateError.message);
+          }
+          
+          return { updatedCard: fullAccessCard };
+        }
+        
+        // Check for permission conflict
+        if (isPermissionConflictError(result.error)) {
+          log.info('Permission conflict detected for folder in Universal Action', { folderUid, requesterEmail, error: result.error });
+          return { error: result.error, keepCardActive: true };
+        }
+        
+        // Check if this is an owner error (rare for folders, but handle it)
+        if (isRecordOwnerError(result.error)) {
+          log.info('Folder owner error detected in Universal Action', { folderUid, requesterEmail });
+          
+          const ownerStatusCard = cards.buildFolderApprovalCardWithStatus({
+            approvalId,
+            requesterName,
+            requesterEmail,
+            folderName,
+            justification: data.justification || '',
+            status: 'owner',
+            statusMessage: 'User Already Has Full Access',
+            approverName: approver.name,
+            permission,
+            processedTime,
+          });
+          
+          // Update the channel card for all users
+          try {
+            await tryUpdateApprovalCard(approvalId, ownerStatusCard, context);
+            log.debug('Updated channel card with owner status');
+          } catch (updateError) {
+            log.debug('Could not update channel card', updateError.message);
+          }
+          
+          return { updatedCard: ownerStatusCard };
+        }
+        
         log.error('Failed to grant folder access', result.error);
         return { error: result.error };
       }
@@ -1107,6 +1442,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
         }
       }
       
+      // Update the channel card for all users
+      try {
+        await tryUpdateApprovalCard(approvalId, updatedCard, context);
+        log.debug('Updated channel card with folder approved status');
+      } catch (updateError) {
+        log.debug('Could not update channel card', updateError.message);
+      }
+      
       return { updatedCard };
     }
     
@@ -1171,6 +1514,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
         }
       }
       
+      // Update the channel card for all users
+      try {
+        await tryUpdateApprovalCard(approvalId, updatedCard, context);
+        log.debug('Updated channel card with denied status');
+      } catch (updateError) {
+        log.debug('Could not update channel card', updateError.message);
+      }
+      
       return { updatedCard };
     }
     
@@ -1233,6 +1584,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
         } catch (notifyError) {
           log.error('Error sending notification', notifyError.message);
         }
+      }
+      
+      // Update the channel card for all users
+      try {
+        await tryUpdateApprovalCard(approvalId, updatedCard, context);
+        log.debug('Updated channel card with folder denied status');
+      } catch (updateError) {
+        log.debug('Could not update channel card', updateError.message);
       }
       
       return { updatedCard };
@@ -1398,6 +1757,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
         }
       }
       
+      // Update the channel card for all users
+      try {
+        await tryUpdateApprovalCard(approvalId, updatedCard, context);
+        log.debug('Updated channel card with share approved status');
+      } catch (updateError) {
+        log.debug('Could not update channel card', updateError.message);
+      }
+      
       return { updatedCard };
     }
     
@@ -1461,6 +1828,14 @@ async function routeApprovalActionWithCardResponse(context, data) {
         } catch (notifyError) {
           log.error('Error sending notification', notifyError.message);
         }
+      }
+      
+      // Update the channel card for all users
+      try {
+        await tryUpdateApprovalCard(approvalId, updatedCard, context);
+        log.debug('Updated channel card with share denied status');
+      } catch (updateError) {
+        log.debug('Could not update channel card', updateError.message);
       }
       
       return { updatedCard };
@@ -1682,7 +2057,32 @@ async function handleInlineLookup(verb, data, searchQuery) {
         originalFolderName: folderName,
       });
     } else if (isShare) {
-      const foundRecords = results.map(r => ({
+      // Filter out PAM records (one-time shares not available for PAM records)
+      const pamRecordTypes = ['pamdirectory', 'pamdatabase', 'pammachine', 'pamuser', 'pamremotebrowser'];
+      const filteredResults = results.filter(r => {
+        const recordType = (r.recordType || r.record_type || '').toLowerCase();
+        return !pamRecordTypes.some(pamType => recordType.includes(pamType));
+      });
+      
+      // Check if all results were filtered out (all were PAM records)
+      if (filteredResults.length === 0) {
+        log.debug('All search results were PAM records, showing no results message');
+        return cards.buildShareSearchResultsCard({
+          approvalId,
+          requesterName,
+          requesterId,
+          requesterEmail,
+          requesterAadObjectId,
+          justification,
+          identifier,
+          searchQuery: query,
+          noResults: true,
+          pamRecordsOnly: true,
+          originalRecordTitle: recordTitle,
+        });
+      }
+      
+      const foundRecords = filteredResults.map(r => ({
         uid: r.uid || r.record_uid,
         title: r.title || r.name || r.uid,
       }));

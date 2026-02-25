@@ -54,6 +54,21 @@ function buildPedmApprovalCard({
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
+    // Refresh property enables auto-refresh for all users when message is edited
+    // Omitting userIds enables auto-refresh for ALL users in channels with <60 members
+    refresh: {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshPedmCard',
+        data: {
+          action: 'refreshPedmCard',
+          approvalUid: approvalUid,
+          agentUid: agentUid,
+          username: username,
+          command: command || fileName,
+        },
+      },
+    },
     body: [
       {
         type: 'Container',

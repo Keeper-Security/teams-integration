@@ -4,6 +4,7 @@
  */
 
 const { RECORD_PERMISSIONS, FOLDER_PERMISSIONS } = require('./constants');
+const { sanitizeHyperlinks } = require('../utils/helpers');
 
 /**
  * Build common header section for search results cards
@@ -14,6 +15,9 @@ const { RECORD_PERMISSIONS, FOLDER_PERMISSIONS } = require('./constants');
  * @returns {Array} Array of card body elements
  */
 function buildSearchCardHeader(title, requesterName, approvalId, justification) {
+  // Sanitize justification to prevent URL injection
+  const safeJustification = sanitizeHyperlinks(justification) || 'No justification provided';
+  
   return [
     {
       type: 'TextBlock',
@@ -67,7 +71,7 @@ function buildSearchCardHeader(title, requesterName, approvalId, justification) 
             },
             {
               type: 'TextBlock',
-              text: justification || 'No justification provided',
+              text: safeJustification,
               wrap: true,
               size: 'Medium',
             },

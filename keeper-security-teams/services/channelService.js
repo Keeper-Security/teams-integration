@@ -20,6 +20,11 @@ const log = createLogger('ChannelService');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const REFERENCES_FILE = path.join(DATA_DIR, 'conversationReferences.json');
+const APPROVAL_STATUS_FILE = path.join(DATA_DIR, 'approvalStatus.json');
+const ACTIVITY_IDS_FILE = path.join(DATA_DIR, 'activityIds.json');
+
+// Max age for approval status entries (7 days) - auto-cleanup old entries
+const APPROVAL_STATUS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Ensure data directory exists
@@ -112,6 +117,91 @@ function saveReferencesToFile(references) {
   }
 }
 
+/**
+ * Load approval status from file
+ * Also cleans up entries older than APPROVAL_STATUS_MAX_AGE_MS
+ */
+function loadApprovalStatusFromFile() {
+  try {
+    ensureDataDir();
+    if (fs.existsSync(APPROVAL_STATUS_FILE)) {
+      const data = fs.readFileSync(APPROVAL_STATUS_FILE, 'utf8');
+      const statuses = JSON.parse(data);
+      const now = Date.now();
+      const cleaned = {};
+      let cleanedCount = 0;
+      
+      // Filter out old entries
+      for (const [key, status] of Object.entries(statuses)) {
+        const updatedAt = new Date(status.updatedAt).getTime();
+        if (now - updatedAt < APPROVAL_STATUS_MAX_AGE_MS) {
+          cleaned[key] = status;
+        } else {
+          cleanedCount++;
+        }
+      }
+      
+      if (cleanedCount > 0) {
+        log.info(`Cleaned up ${cleanedCount} old approval status entries`);
+        // Save cleaned data back to file
+        saveApprovalStatusToFile(cleaned);
+      }
+      
+      log.info(`Loaded ${Object.keys(cleaned).length} approval status entries from file`);
+      return cleaned;
+    }
+  } catch (error) {
+    log.error('Error loading approval status from file', error.message);
+  }
+  return {};
+}
+
+/**
+ * Save approval status to file
+ */
+function saveApprovalStatusToFile(statuses) {
+  try {
+    ensureDataDir();
+    const data = JSON.stringify(statuses, null, 2);
+    fs.writeFileSync(APPROVAL_STATUS_FILE, data, 'utf8');
+    log.debug('Saved approval status to file');
+  } catch (error) {
+    log.error('Error saving approval status to file', error.message);
+  }
+}
+
+/**
+ * Load activity IDs from file
+ */
+function loadActivityIdsFromFile() {
+  try {
+    ensureDataDir();
+    if (fs.existsSync(ACTIVITY_IDS_FILE)) {
+      const data = fs.readFileSync(ACTIVITY_IDS_FILE, 'utf8');
+      const ids = JSON.parse(data);
+      log.info(`Loaded ${Object.keys(ids).length} activity IDs from file`);
+      return ids;
+    }
+  } catch (error) {
+    log.error('Error loading activity IDs from file', error.message);
+  }
+  return {};
+}
+
+/**
+ * Save activity IDs to file
+ */
+function saveActivityIdsToFile(ids) {
+  try {
+    ensureDataDir();
+    const data = JSON.stringify(ids, null, 2);
+    fs.writeFileSync(ACTIVITY_IDS_FILE, data, 'utf8');
+    log.debug('Saved activity IDs to file');
+  } catch (error) {
+    log.error('Error saving activity IDs to file', error.message);
+  }
+}
+
 // Cache for connector clients by service URL
 const connectorClients = new Map();
 
@@ -146,20 +236,20 @@ function getConnectorClient(serviceUrl) {
 const conversationReferences = new Map(Object.entries(loadReferencesFromFile()));
 
 /**
- * In-memory store for approval card activity IDs
+ * Persistent store for approval card activity IDs (loaded from file on startup)
  * Maps approvalId -> activityId for updating cards later
  */
-const approvalActivityMap = new Map();
+const approvalActivityMap = new Map(Object.entries(loadActivityIdsFromFile()));
 
 /**
- * In-memory store for approval status
+ * Persistent store for approval status (loaded from file on startup)
  * Maps approvalId -> { status, approverName, permission, duration, expiresAt, processedTime, ... }
  * This is used by the refresh mechanism to return the correct card state
  */
-const approvalStatusMap = new Map();
+const approvalStatusMap = new Map(Object.entries(loadApprovalStatusFromFile()));
 
 /**
- * Store approval status for refresh mechanism
+ * Store approval status for refresh mechanism (persisted to file)
  * @param {string} approvalId - The approval request ID
  * @param {Object} statusData - Status data including status, approverName, etc.
  */
@@ -169,6 +259,10 @@ function storeApprovalStatus(approvalId, statusData) {
     updatedAt: new Date().toISOString(),
   });
   log.debug(`Stored approval status for ${approvalId}: ${statusData.status}`);
+  
+  // Persist to file
+  const allStatuses = Object.fromEntries(approvalStatusMap);
+  saveApprovalStatusToFile(allStatuses);
 }
 
 /**
@@ -206,13 +300,17 @@ function storeConversationReference(key, reference) {
 }
 
 /**
- * Store an approval card's activity ID for later updates
+ * Store an approval card's activity ID for later updates (persisted to file)
  * @param {string} approvalId - The approval request ID
  * @param {string} activityId - The Teams activity ID of the card message
  */
 function storeApprovalActivityId(approvalId, activityId) {
   approvalActivityMap.set(approvalId, activityId);
-  log.debug(`Stored activity ID for approval ${approvalId}: ${activityId}`);
+  log.info(`Stored activity ID for approval ${approvalId}: ${activityId}`);
+  
+  // Persist to file
+  const allIds = Object.fromEntries(approvalActivityMap);
+  saveActivityIdsToFile(allIds);
 }
 
 /**
@@ -221,7 +319,9 @@ function storeApprovalActivityId(approvalId, activityId) {
  * @returns {string|null} - The activity ID or null
  */
 function getApprovalActivityId(approvalId) {
-  return approvalActivityMap.get(approvalId) || null;
+  const activityId = approvalActivityMap.get(approvalId) || null;
+  log.debug(`Retrieved activity ID for approval ${approvalId}: ${activityId}`);
+  return activityId;
 }
 
 /**
@@ -230,6 +330,11 @@ function getApprovalActivityId(approvalId) {
  */
 function removeApprovalActivityId(approvalId) {
   approvalActivityMap.delete(approvalId);
+  log.debug(`Removed activity ID for approval ${approvalId}`);
+  
+  // Persist to file
+  const allIds = Object.fromEntries(approvalActivityMap);
+  saveActivityIdsToFile(allIds);
 }
 
 /**
@@ -511,7 +616,8 @@ class ChannelService {
   }
 
   /**
-   * Update an activity using Teams SDK API
+   * Update an activity using Bot Framework ConnectorClient
+   * Uses the bot's own credentials for proper authorization
    * @param {string} activityId - The activity ID to update
    * @param {Object} updatedCard - The updated Adaptive Card
    * @returns {Promise<boolean>}
@@ -524,83 +630,75 @@ class ChannelService {
       return false;
     }
 
-    if (!this.app) {
-      log.error('App not initialized for update');
-      return false;
-    }
-
-    let conversationId = approvalsRef.conversation.id;
-    if (conversationId.includes(';messageid=')) {
+    let conversationId = approvalsRef.conversationId || approvalsRef.conversation?.id;
+    if (conversationId && conversationId.includes(';messageid=')) {
       conversationId = conversationId.split(';messageid=')[0];
     }
 
-    log.debug('Attempting update', { conversationId, activityId });
+    if (!conversationId) {
+      log.error('Missing conversation ID');
+      return false;
+    }
 
+    log.debug('Attempting card update', { conversationId, activityId, serviceUrl: approvalsRef.serviceUrl });
+
+    // Build the updated activity with all required fields
+    const fullActivity = {
+      type: 'message',
+      id: activityId,
+      from: approvalsRef.bot ? { id: approvalsRef.bot.id || approvalsRef.botId } : { id: approvalsRef.botId },
+      conversation: { id: conversationId },
+      channelId: approvalsRef.channelId || 'msteams',
+      serviceUrl: approvalsRef.serviceUrl,
+      attachments: [{
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        content: updatedCard,
+      }],
+    };
+
+    // Use ConnectorClient with bot credentials (most reliable method)
     try {
-      // Build the updated activity
-      const activity = {
-        type: 'message',
-        id: activityId,
-        attachments: [{
-          contentType: 'application/vnd.microsoft.card.adaptive',
-          content: updatedCard,
-        }],
-      };
-
-      if (this.app.api && this.app.api.conversations) {
-        log.debug('Using app.api.conversations for update');
-        const result = await this.app.api.conversations.activities(conversationId).update(
-          activityId,
-          activity
-        );
-        log.debug('Activity updated via Teams SDK API', { activityId, result });
-        return true;
-      }
+      log.debug('Using ConnectorClient with bot credentials');
+      const client = getConnectorClient(approvalsRef.serviceUrl);
       
-      log.debug('app.api.conversations not available, trying direct client');
-      const { Client: ApiClient } = require('@microsoft/teams.api');
-      const apiClient = new ApiClient(approvalsRef.serviceUrl, this.app.client);
-      
-      const result = await apiClient.conversations.activities(conversationId).update(
+      await client.conversations.updateActivity(
+        conversationId,
         activityId,
-        activity
+        fullActivity
       );
       
-      log.debug('Activity updated via direct API client', { activityId, result });
+      log.info('Activity updated successfully via ConnectorClient', { activityId });
       return true;
-    } catch (error) {
-      log.error('Error updating activity', { message: error.message, stack: error.stack });
-      
+    } catch (connectorError) {
+      log.error('ConnectorClient update failed', { 
+        message: connectorError.message,
+        statusCode: connectorError.response?.status,
+        body: connectorError.response?.data
+      });
+    }
+
+    // Fallback: Try Teams SDK API if available
+    if (this.app?.api?.conversations) {
       try {
-        log.debug('Trying ConnectorClient as last resort');
-        const client = getConnectorClient(approvalsRef.serviceUrl);
-        
-        const fullActivity = {
+        log.debug('Fallback: Using app.api.conversations');
+        const activity = {
           type: 'message',
           id: activityId,
-          from: approvalsRef.bot,
-          conversation: { id: conversationId },
-          channelId: approvalsRef.channelId,
-          serviceUrl: approvalsRef.serviceUrl,
           attachments: [{
             contentType: 'application/vnd.microsoft.card.adaptive',
             content: updatedCard,
           }],
         };
-
-        await client.conversations.updateActivity(
-          conversationId,
-          activityId,
-          fullActivity
-        );
         
-        log.debug('Activity updated via ConnectorClient (last resort)');
+        await this.app.api.conversations.activities(conversationId).update(activityId, activity);
+        log.info('Activity updated via Teams SDK API fallback', { activityId });
         return true;
-      } catch (connectorError) {
-        log.error('ConnectorClient also failed', connectorError.message);
-        return false;
+      } catch (apiError) {
+        log.error('Teams SDK API update also failed', apiError.message);
       }
     }
+
+    return false;
   }
 
   /**

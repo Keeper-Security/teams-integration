@@ -13,7 +13,7 @@ const { getChannelService, createLogger } = require('../services');
 const graphService = require('../services/graphService');
 const cards = require('../cards');
 const config = require('../config');
-const { isUid } = require('../utils/helpers');
+const { isUid, looksLikeInvalidUid, isPamRecordError } = require('../utils/helpers');
 
 const log = createLogger('CommandHandler');
 
@@ -61,19 +61,27 @@ function parseUidAndJustification(argsText) {
   }
   
   // Check if starts with quote (name with spaces)
-  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
-    const quote = trimmed[0];
-    const endQuote = trimmed.indexOf(quote, 1);
+  // Support both straight quotes and smart/curly quotes
+  // Smart quotes: " (\u201C), " (\u201D), ' (\u2018), ' (\u2019)
+  const quoteChars = ['"', "'", '\u201C', '\u201D', '\u2018', '\u2019'];
+  const firstChar = trimmed[0];
+  
+  if (quoteChars.includes(firstChar)) {
+    // Map smart quotes to their closing pairs
+    const closingQuote = firstChar === '\u201C' ? '\u201D' : 
+                         firstChar === '\u2018' ? '\u2019' : firstChar;
+    const endQuote = trimmed.indexOf(closingQuote, 1);
     if (endQuote > 0) {
-      const uid = trimmed.substring(1, endQuote);
+      const uid = trimmed.substring(1, endQuote).trim();
       const justification = trimmed.substring(endQuote + 1).trim();
-      return { uid, justification };
+      // Return null if uid is empty after trimming
+      return { uid: uid || null, justification };
     }
   }
   
   // Otherwise, first word is uid, rest is justification
   const [uid, ...rest] = trimmed.split(/\s+/);
-  return { uid, justification: rest.join(' ') };
+  return { uid: uid || null, justification: rest.join(' ') };
 }
 
 /**
@@ -124,35 +132,50 @@ async function getUserInfo(activity) {
 async function handleRequestRecord(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
-  if (!uid) {
+  if (!uid || !uid.trim()) {
     await context.send('**Usage:** `keeper-request-record <record-name> <justification>`\n\nExample: `keeper-request-record AWS-Prod Need for deployment`');
     return;
   }
   
-  if (!justification) {
+  if (!justification || !justification.trim()) {
     await context.send('Please provide a justification for your access request.\n\n**Usage:** `keeper-request-record <record-name> <justification>`');
     return;
   }
   
+  const trimmedUid = uid.trim();
+  
+  // Check if it looks like an invalid UID (wrong length but UID-like pattern)
+  if (looksLikeInvalidUid(trimmedUid)) {
+    await context.send(`**Invalid UID Format**\n\nThe identifier \`${trimmedUid}\` looks like a UID but has an invalid length (${trimmedUid.length} characters).\n\nKeeper UIDs are typically 22 characters. Please verify and try again.`);
+    return;
+  }
+  
   // Check if identifier is a UID or description
-  const isUidFormat = isUid(uid.trim());
+  const isUidFormat = isUid(trimmedUid);
   let record = null;
   let recordUid = null;
   let recordTitle = uid; // Default to the identifier
   
   if (isUidFormat) {
     // Try to get record by UID
-    record = await keeperClient.getRecordByUid(uid.trim());
+    record = await keeperClient.getRecordByUid(trimmedUid);
     if (record) {
       recordUid = record.uid;
       recordTitle = record.title;
+      
+      // Check if it's actually a folder, not a record
+      const recordType = (record.recordType || record.record_type || '').toLowerCase();
+      if (recordType.includes('folder') || recordType === 'shared_folder' || recordType === 'user_folder') {
+        await context.send(`**Invalid UID Type**\n\nThe UID \`${trimmedUid}\` is a **folder**, not a record.\n\nPlease use \`keeper-request-folder ${trimmedUid} ${justification}\` instead.`);
+        return;
+      }
     }
   }
   
   // If not found by UID or not a UID format, treat as description
   if (!record && isUidFormat) {
     // UID format but not found - might be invalid
-    await context.send('Record not found: `' + uid + '`\n\nPlease check the UID and try again.');
+    await context.send(`**Record Not Found**\n\nNo record found with UID: \`${trimmedUid}\`\n\nPlease verify the UID and try again.`);
     return;
   }
   
@@ -238,35 +261,50 @@ async function handleRequestRecord(context, argsText) {
 async function handleRequestFolder(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
-  if (!uid) {
+  if (!uid || !uid.trim()) {
     await context.send('**Usage:** `keeper-request-folder <folder-name> <justification>`\n\nExample: `keeper-request-folder "Engineering Creds" Project onboarding`');
     return;
   }
   
-  if (!justification) {
+  if (!justification || !justification.trim()) {
     await context.send('Please provide a justification for your access request.\n\n**Usage:** `keeper-request-folder <folder-name> <justification>`');
     return;
   }
   
+  const trimmedUid = uid.trim();
+  
+  // Check if it looks like an invalid UID (wrong length but UID-like pattern)
+  if (looksLikeInvalidUid(trimmedUid)) {
+    await context.send(`**Invalid UID Format**\n\nThe identifier \`${trimmedUid}\` looks like a UID but has an invalid length (${trimmedUid.length} characters).\n\nKeeper UIDs are typically 22 characters. Please verify and try again.`);
+    return;
+  }
+  
   // Check if identifier is a UID or description
-  const isUidFormat = isUid(uid.trim());
+  const isUidFormat = isUid(trimmedUid);
   let folder = null;
   let folderUid = null;
   let folderName = uid; // Default to the identifier
   
   if (isUidFormat) {
     // Try to get folder by UID
-    folder = await keeperClient.getFolderByUid(uid.trim());
+    folder = await keeperClient.getFolderByUid(trimmedUid);
     if (folder) {
       folderUid = folder.uid;
       folderName = folder.name;
+      
+      // Check if it's actually a record, not a folder
+      const folderType = (folder.folderType || folder.folder_type || '').toLowerCase();
+      if (folderType === 'record' || folderType === 'login' || folderType === 'general') {
+        await context.send(`**Invalid UID Type**\n\nThe UID \`${trimmedUid}\` is a **record**, not a folder.\n\nPlease use \`keeper-request-record ${trimmedUid} ${justification}\` instead.`);
+        return;
+      }
     }
   }
   
   // If not found by UID or not a UID format, treat as description
   if (!folder && isUidFormat) {
     // UID format but not found - might be invalid
-    await context.send('Folder not found: `' + uid + '`\n\nPlease check the UID and try again.');
+    await context.send(`**Folder Not Found**\n\nNo folder found with UID: \`${trimmedUid}\`\n\nPlease verify the UID and try again.`);
     return;
   }
   
@@ -352,18 +390,26 @@ async function handleRequestFolder(context, argsText) {
 async function handleShare(context, argsText) {
   const { uid, justification } = parseUidAndJustification(argsText);
   
-  if (!uid) {
+  if (!uid || !uid.trim()) {
     await context.send('**Usage:** `keeper-one-time-share <record-name> [justification]`\n\nExample: `keeper-one-time-share AWS-Prod Share with contractor`');
     return;
   }
   
-  if (!justification) {
+  if (!justification || !justification.trim()) {
     await context.send('**Justification is required.**\n\n**Usage:** `keeper-one-time-share "<record-name>" <justification>`\n\nExample: `keeper-one-time-share "AWS-Prod" Share with contractor for audit`');
     return;
   }
   
+  const trimmedUid = uid.trim();
+  
+  // Check if it looks like an invalid UID (wrong length but UID-like pattern)
+  if (looksLikeInvalidUid(trimmedUid)) {
+    await context.send(`**Invalid UID Format**\n\nThe identifier \`${trimmedUid}\` looks like a UID but has an invalid length (${trimmedUid.length} characters).\n\nKeeper UIDs are typically 22 characters. Please verify and try again.`);
+    return;
+  }
+  
   // Check if input is a valid UID (22 char base64)
-  const inputIsUid = isUid(uid);
+  const inputIsUid = isUid(trimmedUid);
   const requiresApproval = config.features.requireShareApproval;
   
   // For approval flow with description, we don't need to fetch record details upfront
@@ -374,18 +420,25 @@ async function handleShare(context, argsText) {
   
   // Only fetch record details if it's a UID (for validation and display)
   if (inputIsUid) {
-    record = await keeperClient.getRecordByUid(uid);
+    record = await keeperClient.getRecordByUid(trimmedUid);
     if (record) {
       recordUid = record.uid;
       recordTitle = record.title;
       
       // Check if it's a folder (one-time-share only works for records)
-      if (record.record_type && (record.record_type.includes('folder') || record.record_type === 'shared_folder')) {
-        await context.send('**One-time share is only available for records, not folders.**\n\nPlease use `keeper-request-folder` for folder access.');
+      const recordType = (record.recordType || record.record_type || '').toLowerCase();
+      if (recordType.includes('folder') || recordType === 'shared_folder' || recordType === 'user_folder') {
+        await context.send(`**Invalid UID Type**\n\nThe UID \`${trimmedUid}\` is a **folder**, not a record.\n\nOne-time share is only available for records. Please use \`keeper-request-folder\` for folder access.`);
+        return;
+      }
+      
+      // Check if it's a PAM record (one-time-share not available for PAM records)
+      if (recordType.includes('pam') || recordType.startsWith('pam')) {
+        await context.send(`**One-Time Share Not Available**\n\nThe record \`${recordTitle}\` is a PAM record.\n\nOne-Time Shares are currently not available for PAM records. Please use \`keeper-request-record\` to request direct access instead.`);
         return;
       }
     } else {
-      await context.send('Record not found with UID: `' + uid + '`\n\nPlease verify the UID and try again.');
+      await context.send(`**Record Not Found**\n\nNo record found with UID: \`${trimmedUid}\`\n\nPlease verify the UID and try again.`);
       return;
     }
   }

@@ -9,16 +9,55 @@ const { createLogger } = require('./logger');
 const log = createLogger('KeeperClient');
 
 /**
- * Shell escape a string for safe command execution
- * @param {string} str - String to escape
- * @returns {string} - Escaped string
+ * Sanitize search query to prevent command injection.
+ * Removes dangerous shell characters that could be used for injection attacks.
+ * Used for SEARCH queries only - not for record field values.
+ * @param {string} query - User input query
+ * @returns {string} - Sanitized query
+ */
+function sanitizeSearchQuery(query) {
+  if (!query) return '';
+  
+  // Characters that could be used for command/shell injection
+  // Matches Slack implementation for consistency
+  const dangerousChars = /[;|&$`(){}[\]!\\<>"'\n\r\x00]/g;
+  return query.replace(dangerousChars, '').trim();
+}
+
+/**
+ * Shell escape a string for SEARCH queries.
+ * First sanitizes (strips dangerous chars), then wraps in quotes if needed.
+ * @param {string} str - Search query string
+ * @returns {string} - Sanitized and escaped string
+ */
+function shellEscapeSearch(str) {
+  if (!str) return '""';
+  // First sanitize, then escape
+  const sanitized = sanitizeSearchQuery(str);
+  if (!sanitized) return '""';
+  if (/[\s]/.test(sanitized)) {
+    return '"' + sanitized + '"';
+  }
+  return sanitized;
+}
+
+/**
+ * Shell escape a string for record field values (title, login, password, notes, url).
+ * Properly escapes special characters WITHOUT stripping them.
+ * This allows users to have passwords/titles with special characters.
+ * @param {string} str - Field value string
+ * @returns {string} - Properly escaped string
  */
 function shellEscape(str) {
   if (!str) return '""';
-  if (/[\s"'\\]/.test(str)) {
-    return '"' + str.replace(/["\\]/g, '\\$&') + '"';
-  }
-  return str;
+  
+  // Convert to string if not already
+  const s = String(str);
+  
+  // Always wrap in single quotes and escape any single quotes within
+  // This is the safest approach for shell escaping (matches Python's shlex.quote)
+  // Single quotes preserve everything literally except single quotes themselves
+  return "'" + s.replace(/'/g, "'\"'\"'") + "'";
 }
 
 class KeeperClient {
@@ -68,7 +107,7 @@ class KeeperClient {
 
   async searchRecords(query, limit = 20) {
     try {
-      const command = 'search -c r ' + shellEscape(query) + ' --format=json';
+      const command = 'search -c r ' + shellEscapeSearch(query) + ' --format=json';
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
@@ -85,7 +124,7 @@ class KeeperClient {
 
   async searchFolders(query, limit = 20) {
     try {
-      const command = 'search -c s ' + shellEscape(query) + ' --format=json';
+      const command = 'search -c s ' + shellEscapeSearch(query) + ' --format=json';
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
@@ -102,8 +141,8 @@ class KeeperClient {
 
   async getRecordByUid(recordUid) {
     try {
-      const command = 'search -c r ' + shellEscape(recordUid) + ' --format=json';
-      const result = await this._executeCommandAsync(command, 15);
+      const command = 'search -c r ' + shellEscapeSearch(recordUid) + ' --format=json';
+      const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
         log.debug('Get record failed', result?.message);
@@ -148,8 +187,8 @@ class KeeperClient {
   async getFolderByUid(folderUid) {
     try {
       // Use -c s to filter for shared folders only (not records)
-      const command = 'search -c s ' + shellEscape(folderUid) + ' --format=json';
-      const result = await this._executeCommandAsync(command, 15);
+      const command = 'search -c s ' + shellEscapeSearch(folderUid) + ' --format=json';
+      const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
         log.debug('Get folder failed', result?.message);
@@ -175,13 +214,107 @@ class KeeperClient {
     }
   }
 
+  /**
+   * Get the owner email of a record
+   * @param {string} recordUid - Record UID
+   * @returns {Promise<string|null>} - Owner email or null if not found
+   */
+  async getRecordOwner(recordUid) {
+    try {
+      const command = 'get --format=json ' + shellEscapeSearch(recordUid);
+      const result = await this._executeCommandAsync(command, 30);
+      
+      if (!result || result.status !== 'success') {
+        log.debug('Get record details failed', result?.message);
+        return null;
+      }
+      
+      const data = result.data;
+      if (!data) {
+        log.debug('No data in get result for record', recordUid);
+        return null;
+      }
+      
+      // Check user_permissions for owner
+      const userPermissions = data.user_permissions || [];
+      for (const userPerm of userPermissions) {
+        if (userPerm.owner === true) {
+          const ownerEmail = userPerm.username;
+          log.debug('Found record owner:', ownerEmail);
+          return ownerEmail;
+        }
+      }
+      
+      log.debug('No owner found in user_permissions for record', recordUid);
+      return null;
+    } catch (error) {
+      log.error('Error getting record owner', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get the current permission level a user has on a folder
+   * @param {string} folderUid - Folder UID
+   * @param {string} userEmail - User's email
+   * @returns {Promise<{manageUsers: boolean, manageRecords: boolean}|null>} - Permission flags or null
+   */
+  async getFolderUserPermission(folderUid, userEmail) {
+    try {
+      const command = 'get --format=json ' + shellEscapeSearch(folderUid);
+      const result = await this._executeCommandAsync(command, 30);
+      
+      if (!result || result.status !== 'success') {
+        log.debug('Get folder details failed', result?.message);
+        return null;
+      }
+      
+      const data = result.data;
+      if (!data) {
+        log.debug('No data in get result for folder', folderUid);
+        return null;
+      }
+      
+      // Check users array for the specific user
+      const userPermissions = data.users || [];
+      const emailLower = userEmail.toLowerCase();
+      
+      for (const userPerm of userPermissions) {
+        const permEmail = (userPerm.username || userPerm.email || '').toLowerCase();
+        if (permEmail === emailLower) {
+          const manageUsers = userPerm.manage_users === true;
+          const manageRecords = userPerm.manage_records === true;
+          log.debug('Found folder permission for user', { userEmail, manageUsers, manageRecords });
+          return { manageUsers, manageRecords };
+        }
+      }
+      
+      log.debug('No permission found for user on folder', { folderUid, userEmail });
+      return null;
+    } catch (error) {
+      log.error('Error getting folder user permission', error.message);
+      return null;
+    }
+  }
+
   // ==================== Access Grant Operations ====================
 
   async grantRecordAccess(recordUid, userEmail, permission, durationSeconds = 86400) {
     try {
+      // Check if the user is the record owner (cannot modify owner's permissions)
+      const recordOwner = await this.getRecordOwner(recordUid);
+      if (recordOwner && userEmail.toLowerCase() === recordOwner.toLowerCase()) {
+        log.info('Cannot grant access to record owner', { recordUid, userEmail });
+        return {
+          success: false,
+          error: `Cannot modify permissions for record owner (${userEmail}). The user already owns this record and has full access to it.`,
+          isOwnerError: true,
+        };
+      }
+      
       if (permission === 'change_owner') {
         const command = 'share-record ' + recordUid + ' -e ' + userEmail + ' -a owner --force';
-        const result = await this._executeCommandAsync(command, 15);
+        const result = await this._executeCommandAsync(command, 30);
         
         if (result?.status === 'success') {
           return {
@@ -228,24 +361,68 @@ class KeeperClient {
       
       command += ' --force';
       
-      const result = await this._executeCommandAsync(command, 15);
+      // Retry logic for share command - helps with newly created records
+      const maxShareRetries = 3;
+      const shareRetryDelays = [0, 2000, 3000]; // No delay first, then 2s, 3s
       
-      if (result?.status === 'success') {
-        // Check if invitation was sent (user doesn't have Keeper account yet)
-        const message = result?.message || '';
-        const invitationSent = this._isInvitationSent(message);
+      for (let shareAttempt = 0; shareAttempt < maxShareRetries; shareAttempt++) {
+        if (shareAttempt > 0) {
+          log.info('Retrying share command, attempt ' + (shareAttempt + 1), { recordUid, userEmail });
+          await new Promise(resolve => setTimeout(resolve, shareRetryDelays[shareAttempt]));
+        }
         
-        return {
-          success: true,
-          expiresAt: expiresAtStr,
-          permission: permission,
-          duration: isPermanent ? 'permanent' : 'temporary',
-          invitationSent: invitationSent,
-        };
-      } else {
-        const errorMsg = this._formatError(result?.message);
-        return { success: false, error: errorMsg };
+        const result = await this._executeCommandAsync(command, 30);
+        
+        if (result?.status === 'success') {
+          // Check if invitation was sent (user doesn't have Keeper account yet)
+          const message = result?.message || '';
+          const invitationSent = this._isInvitationSent(message);
+          
+          if (shareAttempt > 0) {
+            log.info('Share succeeded on retry attempt ' + (shareAttempt + 1), { recordUid });
+          }
+          
+          return {
+            success: true,
+            expiresAt: expiresAtStr,
+            permission: permission,
+            duration: isPermanent ? 'permanent' : 'temporary',
+            invitationSent: invitationSent,
+          };
+        }
+        
+        // Check if the "error" is actually an invitation sent scenario
+        // Commander sometimes returns invitation as an error
+        const errorMsg = this._formatError(result?.message) || '';
+        const errorField = result?.error || '';
+        const combinedMessage = errorMsg + ' ' + errorField;
+        
+        if (this._isInvitationSent(combinedMessage)) {
+          log.info('Record share invitation sent (detected in error response)', { recordUid, userEmail });
+          return {
+            success: true,
+            expiresAt: 'Pending Invitation',
+            permission: permission,
+            duration: 'permanent',
+            invitationSent: true,
+          };
+        }
+        
+        // Check if this is a retryable error
+        const isRetryable = errorMsg.toLowerCase().includes('not found') || 
+                           errorMsg.toLowerCase().includes('does not exist') ||
+                           errorMsg.toLowerCase().includes('unknown') ||
+                           errorMsg.toLowerCase().includes('error');
+        
+        if (!isRetryable || shareAttempt === maxShareRetries - 1) {
+          // Non-retryable error or last attempt failed
+          return { success: false, error: errorMsg || 'Failed to share record' };
+        }
+        
+        log.debug('Share failed with retryable error, will retry', { error: errorMsg, attempt: shareAttempt + 1 });
       }
+      
+      return { success: false, error: 'Failed to share record after multiple attempts' };
     } catch (error) {
       return { success: false, error: 'Error granting record access: ' + error.message };
     }
@@ -253,6 +430,20 @@ class KeeperClient {
 
   async grantFolderAccess(folderUid, userEmail, permission, durationSeconds = 86400) {
     try {
+      // Check if user already has manage_all permission (cannot be downgraded)
+      const currentPermission = await this.getFolderUserPermission(folderUid, userEmail);
+      if (currentPermission && currentPermission.manageUsers && currentPermission.manageRecords) {
+        // User has manage_all - check if trying to downgrade
+        if (permission !== 'manage_all') {
+          log.info('Cannot downgrade folder permission from manage_all', { folderUid, userEmail, requestedPermission: permission });
+          return {
+            success: false,
+            error: `Cannot modify permissions for user (${userEmail}). The user already has "Manage Users and Records" permission on this folder and cannot be downgraded.`,
+            isFullAccessError: true,
+          };
+        }
+      }
+      
       const permissionFlags = [];
       
       switch (permission) {
@@ -288,7 +479,7 @@ class KeeperClient {
       
       command += ' -f';
       
-      const result = await this._executeCommandAsync(command, 15);
+      const result = await this._executeCommandAsync(command, 30);
       
       if (result?.status === 'success') {
         // Check if invitation was sent (user doesn't have Keeper account yet)
@@ -303,7 +494,23 @@ class KeeperClient {
           invitationSent: invitationSent,
         };
       } else {
+        // Check if the "error" is actually an invitation sent scenario
+        // Commander sometimes returns invitation as an error (http_status 400)
         const errorMsg = this._formatError(result?.message);
+        const errorField = result?.error || '';
+        const combinedMessage = errorMsg + ' ' + errorField;
+        
+        if (this._isInvitationSent(combinedMessage)) {
+          log.info('Folder share invitation sent (detected in error response)', { folderUid, userEmail });
+          return {
+            success: true,
+            expiresAt: 'Pending Invitation',
+            permission: permission,
+            duration: 'permanent',
+            invitationSent: true,
+          };
+        }
+        
         return { success: false, error: errorMsg };
       }
     } catch (error) {
@@ -444,46 +651,51 @@ class KeeperClient {
       log.debug('Record created successfully, searching for UID...');
       
       // record-add doesn't return the UID, so we need to search for it
-      // Wait a moment for the record to be indexed
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Wait for the record to be indexed - use longer wait with retry
+      // This addresses timing issues where the record isn't immediately available
       
-      // Search for the newly created record by exact title
-      try {
-        const searchCommand = 'search ' + shellEscape(title) + ' --format=json';
-        const searchResult = await this._executeCommandAsync(searchCommand, 10);
+      const maxRetries = 3;
+      const waitTimes = [2000, 3000, 4000]; // Increasing wait times: 2s, 3s, 4s
+      
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, waitTimes[attempt]));
         
-        if (searchResult && searchResult.status === 'success' && searchResult.data) {
-          const data = Array.isArray(searchResult.data) ? searchResult.data : [];
+        try {
+          const searchCommand = 'search ' + shellEscapeSearch(title) + ' --format=json';
+          const searchResult = await this._executeCommandAsync(searchCommand, 10);
           
-          if (data.length > 0) {
-            // Find the record with matching title (most recently created should be first)
-            const matchingRecord = data.find(r => r.title === title) || data[0];
-            const recordUid = matchingRecord.uid || matchingRecord.record_uid;
+          if (searchResult && searchResult.status === 'success' && searchResult.data) {
+            const data = Array.isArray(searchResult.data) ? searchResult.data : [];
             
-            if (recordUid) {
-              log.debug('Found created record UID', recordUid);
-              return {
-                success: true,
-                recordUid: recordUid,
-                title: title,
-                generatedPassword: generatePassword || password === '$GEN',
-              };
+            if (data.length > 0) {
+              // Find the record with matching title (most recently created should be first)
+              const matchingRecord = data.find(r => r.title === title) || data[0];
+              const recordUid = matchingRecord.uid || matchingRecord.record_uid;
+              
+              if (recordUid) {
+                log.info('Found created record UID after attempt ' + (attempt + 1), { recordUid, title });
+                return {
+                  success: true,
+                  recordUid: recordUid,
+                  title: title,
+                  generatedPassword: generatePassword || password === '$GEN',
+                  isNewlyCreated: true, // Flag to indicate this is a newly created record
+                };
+              }
             }
           }
+          
+          log.debug('Record not found yet, attempt ' + (attempt + 1) + ' of ' + maxRetries);
+        } catch (searchError) {
+          log.debug('Search error on attempt ' + (attempt + 1), searchError.message);
         }
-        
-        log.warn('Record created but UID not found via search');
-        return {
-          success: false,
-          error: 'Record created but UID could not be retrieved. The record exists in your vault but the approval flow cannot continue automatically.',
-        };
-      } catch (searchError) {
-        log.error('Error searching for created record', searchError.message);
-        return {
-          success: false,
-          error: 'Record created but UID could not be retrieved: ' + searchError.message,
-        };
       }
+      
+      log.warn('Record created but UID not found after ' + maxRetries + ' attempts');
+      return {
+        success: false,
+        error: 'Record created but UID could not be retrieved. The record exists in your vault but the approval flow cannot continue automatically. Please try searching for the record manually.',
+      };
     } catch (error) {
       log.error('Exception in createRecord', error);
       return { success: false, error: 'Error creating record: ' + error.message };
@@ -528,23 +740,55 @@ class KeeperClient {
   async approvePedmRequest(approvalUid) {
     try {
       const command = 'epm approval action --approve ' + approvalUid;
-      const result = await this._executeCommandAsync(command, 15);
+      const result = await this._executeCommandAsync(command, 30);
       
       if (result?.status === 'success') {
+        // Check message for "already processed" indicators even on success status
+        const message = result.message || '';
+        const messageLower = typeof message === 'string' ? message.toLowerCase() : '';
+        if (messageLower.includes('does not exist') || 
+            messageLower.includes('cannot be modified') ||
+            messageLower.includes('not found') ||
+            messageLower.includes('no output')) {
+          log.info('EPM request already processed detected in success response', { approvalUid });
+          return { 
+            success: false, 
+            error: 'This request has already been approved or denied.',
+            already_processed: true 
+          };
+        }
         return { success: true };
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to approve PEDM request';
         
-        // Check if this is an "already processed" error
+        // Check if this is an "already processed" error from message
         if (errorMsg.includes('does not exist or cannot be modified') || 
             errorMsg.includes('Approval request does not exist') ||
             errorMsg.includes('not found') ||
             errorMsg.includes('already')) {
           return { 
             success: false, 
-            error: errorMsg,
+            error: 'This request has already been approved or denied.',
             already_processed: true 
           };
+        }
+        
+        // Optimized fallback: if result is null (500/timeout), check if request is still pending
+        if (!result) {
+          log.info('EPM approve failed with null result, checking if still pending', { approvalUid });
+          const pendingRequests = await this.getPendingPedmRequests();
+          const stillPending = pendingRequests.some(r => 
+            r.approval_uid === approvalUid || r.approvalUid === approvalUid || r.uid === approvalUid
+          );
+          
+          if (!stillPending) {
+            log.info('EPM request not in pending list - already processed elsewhere', { approvalUid });
+            return { 
+              success: false, 
+              error: 'This request has already been approved or denied.',
+              already_processed: true 
+            };
+          }
         }
         
         return { success: false, error: errorMsg };
@@ -557,23 +801,55 @@ class KeeperClient {
   async denyPedmRequest(approvalUid) {
     try {
       const command = 'epm approval action --deny ' + approvalUid;
-      const result = await this._executeCommandAsync(command, 15);
+      const result = await this._executeCommandAsync(command, 30);
       
       if (result?.status === 'success') {
+        // Check message for "already processed" indicators even on success status
+        const message = result.message || '';
+        const messageLower = typeof message === 'string' ? message.toLowerCase() : '';
+        if (messageLower.includes('does not exist') || 
+            messageLower.includes('cannot be modified') ||
+            messageLower.includes('not found') ||
+            messageLower.includes('no output')) {
+          log.info('EPM request already processed detected in success response', { approvalUid });
+          return { 
+            success: false, 
+            error: 'This request has already been approved or denied.',
+            already_processed: true 
+          };
+        }
         return { success: true };
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to deny PEDM request';
         
-        // Check if this is an "already processed" error
+        // Check if this is an "already processed" error from message
         if (errorMsg.includes('does not exist or cannot be modified') || 
             errorMsg.includes('Approval request does not exist') ||
             errorMsg.includes('not found') ||
             errorMsg.includes('already')) {
           return { 
             success: false, 
-            error: errorMsg,
+            error: 'This request has already been approved or denied.',
             already_processed: true 
           };
+        }
+        
+        // Optimized fallback: if result is null (500/timeout), check if request is still pending
+        if (!result) {
+          log.info('EPM deny failed with null result, checking if still pending', { approvalUid });
+          const pendingRequests = await this.getPendingPedmRequests();
+          const stillPending = pendingRequests.some(r => 
+            r.approval_uid === approvalUid || r.approvalUid === approvalUid || r.uid === approvalUid
+          );
+          
+          if (!stillPending) {
+            log.info('EPM request not in pending list - already processed elsewhere', { approvalUid });
+            return { 
+              success: false, 
+              error: 'This request has already been approved or denied.',
+              already_processed: true 
+            };
+          }
         }
         
         return { success: false, error: errorMsg };
@@ -608,25 +884,58 @@ class KeeperClient {
 
   async approveDevice(deviceId) {
     try {
+      // First check if device is still pending (prevents approving already-processed requests)
+      const pendingDevices = await this.getPendingDeviceApprovals();
+      const isPending = pendingDevices.some(d => 
+        d.device_id === deviceId || d.deviceId === deviceId || d.id === deviceId
+      );
+      
+      if (!isPending) {
+        log.info('Device not in pending list - already processed elsewhere', { deviceId });
+        return { 
+          success: false, 
+          already_processed: true, 
+          error: 'This request has already been approved or denied from another platform.' 
+        };
+      }
+      
+      // Device is pending, proceed with approval
       const command = 'device-approve --approve ' + deviceId;
-      const result = await this._executeCommandAsync(command, 15);
+      const result = await this._executeCommandAsync(command, 30);
+      
+      log.info('approveDevice result:', JSON.stringify(result));
       
       if (result?.status === 'success') {
+        // Also check message and data for "no pending" indicators
         const message = result.message || '';
-        if (typeof message === 'string' && message.toLowerCase().includes('no pending devices')) {
-          return { success: false, already_processed: true, error: 'Device request was already processed' };
+        const dataStr = typeof result.data === 'string' ? result.data : JSON.stringify(result.data || '');
+        const combinedText = (message + ' ' + dataStr).toLowerCase();
+        
+        // Check if this is an "already processed" response
+        if (combinedText.includes('no pending') || 
+            combinedText.includes('there are no pending') ||
+            combinedText.includes('already processed') ||
+            combinedText.includes('already approved') ||
+            combinedText.includes('already denied') ||
+            combinedText.includes('no output')) {
+          log.info('Device already processed detected in success response', deviceId);
+          return { success: false, already_processed: true, error: 'This request has already been approved or denied from another platform.' };
         }
         return { success: true };
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to approve device';
+        const errorLower = errorMsg.toLowerCase();
         
-        // Check if this is an "already processed" error
-        if (errorMsg.includes('no pending') || 
-            errorMsg.includes('not found') ||
-            errorMsg.includes('already')) {
+        // Check if this is an "already processed" error (case-insensitive)
+        if (errorLower.includes('no pending') || 
+            errorLower.includes('not found') ||
+            errorLower.includes('already') ||
+            errorLower.includes('does not exist') ||
+            errorLower.includes('invalid device')) {
+          log.info('Device already processed detected in error response', deviceId);
           return { 
             success: false, 
-            error: errorMsg,
+            error: 'This request has already been approved or denied from another platform.',
             already_processed: true 
           };
         }
@@ -634,45 +943,81 @@ class KeeperClient {
         return { success: false, error: errorMsg };
       }
     } catch (error) {
+      log.error('approveDevice exception:', error.message);
       return { success: false, error: error.message };
     }
   }
 
   async denyDevice(deviceId) {
     try {
+      // Optimized: try operation first, only check pending list on failure
       const command = 'device-approve --deny ' + deviceId;
-      const result = await this._executeCommandAsync(command, 15);
+      const result = await this._executeCommandAsync(command, 30);
+      
+      log.info('denyDevice result:', JSON.stringify(result));
       
       if (result?.status === 'success') {
         const message = result.message || '';
-        if (typeof message === 'string' && message.toLowerCase().includes('no pending devices')) {
-          return { success: false, already_processed: true, error: 'Device request was already processed' };
+        const messageLower = typeof message === 'string' ? message.toLowerCase() : '';
+        
+        // Check if this is an "already processed" response
+        if (messageLower.includes('no pending') || 
+            messageLower.includes('there are no pending') ||
+            messageLower.includes('already processed') ||
+            messageLower.includes('already approved') ||
+            messageLower.includes('already denied') ||
+            messageLower.includes('no output')) {
+          log.info('Device already processed detected in success response', deviceId);
+          return { success: false, already_processed: true, error: 'This request has already been approved or denied from another platform.' };
         }
         return { success: true };
       } else {
         const errorMsg = this._formatError(result?.message) || 'Failed to deny device';
+        const errorLower = errorMsg.toLowerCase();
         
-        // Check if this is an "already processed" error
-        if (errorMsg.includes('no pending') || 
-            errorMsg.includes('not found') ||
-            errorMsg.includes('already')) {
+        // Check if this is an "already processed" error (case-insensitive)
+        if (errorLower.includes('no pending') || 
+            errorLower.includes('not found') ||
+            errorLower.includes('already') ||
+            errorLower.includes('does not exist') ||
+            errorLower.includes('invalid device')) {
+          log.info('Device already processed detected in error response', deviceId);
           return { 
             success: false, 
-            error: errorMsg,
+            error: 'This request has already been approved or denied from another platform.',
             already_processed: true 
           };
+        }
+        
+        // Optimized fallback: if result is null (500/timeout), check pending list
+        if (!result) {
+          log.info('Device deny failed with null result, checking if still pending', { deviceId });
+          const pendingDevices = await this.getPendingDeviceApprovals();
+          const stillPending = pendingDevices.some(d => 
+            d.device_id === deviceId || d.deviceId === deviceId || d.id === deviceId
+          );
+          
+          if (!stillPending) {
+            log.info('Device not in pending list - already processed elsewhere', { deviceId });
+            return { 
+              success: false, 
+              already_processed: true, 
+              error: 'This request has already been approved or denied from another platform.' 
+            };
+          }
         }
         
         return { success: false, error: errorMsg };
       }
     } catch (error) {
+      log.error('denyDevice exception:', error.message);
       return { success: false, error: error.message };
     }
   }
 
   // ==================== Helper Methods ====================
 
-  async _executeCommandAsync(command, maxWait = 15) {
+  async _executeCommandAsync(command, maxWait = 30) {
     try {
       log.debug('Executing command', command);
       
@@ -696,7 +1041,7 @@ class KeeperClient {
     }
   }
 
-  async _pollForResult(requestId, maxWait = 15) {
+  async _pollForResult(requestId, maxWait = 30) {
     let pollInterval = 500;
     const maxPollInterval = 2000;
     let elapsed = 0;
@@ -833,17 +1178,23 @@ class KeeperClient {
     if (!message) return false;
     
     if (Array.isArray(message)) {
-      message = message.join('\n');
+      message = message.join(' ');
     }
     
-    const lower = message.toLowerCase();
+    const lower = String(message).toLowerCase();
     
-    // Common indicators that an invitation was sent instead of immediate share
+    // Primary indicators from Keeper Commander (matches Slack implementation)
+    if (lower.includes('invitation has been sent') || 
+        lower.includes('repeat this command when invitation is accepted')) {
+      return true;
+    }
+    
+    // Additional indicators that an invitation was sent instead of immediate share
     return lower.includes('invitation') || 
            lower.includes('invite') ||
            lower.includes('pending share') ||
            lower.includes('not a keeper user') ||
-           lower.includes('does not have') ||
+           lower.includes('does not have a keeper') ||
            lower.includes('user not found') ||
            lower.includes('email will be sent') ||
            lower.includes('share pending');

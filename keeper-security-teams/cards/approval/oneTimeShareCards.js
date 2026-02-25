@@ -5,6 +5,7 @@
 
 const { SHARE_DURATION_OPTIONS } = require('../constants');
 const { buildSearchCardHeader, buildNoResultsSection } = require('../cardHelpers');
+const { sanitizeHyperlinks } = require('../../utils/helpers');
 
 /**
  * Build a search results card for one-time share
@@ -20,6 +21,7 @@ function buildShareSearchResultsCard({
   searchQuery,
   foundRecords,
   noResults = false,
+  pamRecordsOnly = false,
   originalRecordTitle,
 }) {
   const headerElements = buildSearchCardHeader('One-Time Share Request', requesterName, approvalId, justification);
@@ -35,7 +37,21 @@ function buildShareSearchResultsCard({
   const baseData = { approvalId, identifier, requesterId, requesterEmail, requesterAadObjectId, requesterName, justification };
   
   if (noResults) {
-    card.body.push(...buildNoResultsSection(searchQuery, 'share'));
+    // Show specific message if all results were PAM records
+    if (pamRecordsOnly) {
+      card.body.push(
+        { type: 'Container', style: 'attention', spacing: 'Medium', items: [
+          { type: 'TextBlock', text: 'No Eligible Records Found', weight: 'Bolder', color: 'Attention' },
+          { type: 'TextBlock', text: `Search: "${searchQuery}"`, size: 'Small', isSubtle: true, wrap: true },
+        ]},
+        { type: 'TextBlock', text: 'The search returned only PAM records (pamDirectory, pamDatabase, pamMachine, pamUser, pamRemoteBrowser).', wrap: true, spacing: 'Small' },
+        { type: 'TextBlock', text: 'One-Time Shares are not available for PAM records. The requester should use `keeper-request-record` to request direct access instead.', wrap: true, spacing: 'Small', isSubtle: true },
+        { type: 'TextBlock', text: 'Search Input', weight: 'Bolder', spacing: 'Medium' },
+        { type: 'Input.Text', id: 'searchQuery', placeholder: 'Enter record name...', value: searchQuery || '' }
+      );
+    } else {
+      card.body.push(...buildNoResultsSection(searchQuery, 'share'));
+    }
     
     card.actions = [
       { type: 'Action.Execute', title: '🔍 Search', style: 'positive', verb: 'lookup_share', data: { action: 'lookup_share', ...baseData, recordTitle: originalRecordTitle } },
@@ -105,6 +121,10 @@ function buildOneTimeShareApprovalCard({
 }) {
   const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
   
+  // Sanitize identifier and justification to prevent URL injection
+  const safeIdentifier = sanitizeHyperlinks(identifier || recordTitle);
+  const safeJustification = sanitizeHyperlinks(justification) || 'No justification provided';
+  
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -121,7 +141,7 @@ function buildOneTimeShareApprovalCard({
               { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
               { type: 'TextBlock', text: requesterName, color: 'Warning', size: 'Medium' },
               { type: 'TextBlock', text: 'Record:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-              { type: 'TextBlock', text: identifier || recordTitle, color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: safeIdentifier, color: 'Warning', size: 'Medium' },
               { type: 'TextBlock', text: 'Requested:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
               { type: 'TextBlock', text: requestedTime, size: 'Medium' },
             ],
@@ -133,7 +153,7 @@ function buildOneTimeShareApprovalCard({
               { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
               { type: 'TextBlock', text: approvalId, color: 'Warning', size: 'Medium' },
               { type: 'TextBlock', text: 'Justification:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-              { type: 'TextBlock', text: justification || 'No justification provided', wrap: true, size: 'Medium' },
+              { type: 'TextBlock', text: safeJustification, wrap: true, size: 'Medium' },
             ],
           },
         ],
@@ -143,6 +163,26 @@ function buildOneTimeShareApprovalCard({
   };
   
   if (isUid && recordUid) {
+    // Refresh property enables auto-refresh for all users when message is edited
+    // Omitting userIds enables auto-refresh for ALL users in channels with <60 members
+    card.refresh = {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshApprovalCard',
+        data: {
+          approvalId,
+          type: 'share',
+          requesterId,
+          requesterEmail,
+          requesterName,
+          recordTitle,
+          recordUid,
+          justification,
+          identifier,
+          isUid,
+        },
+      },
+    };
     // Add Record Details section when UID is resolved
     if (recordTitle && recordTitle !== identifier) {
       card.body.push({

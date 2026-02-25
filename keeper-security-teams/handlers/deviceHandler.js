@@ -8,13 +8,70 @@
  * Features:
  * - In-place card updates (not new messages)
  * - Already processed request handling
+ * - Channel card updates for all users via message edit
  */
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
-const { createLogger } = require('../services');
+const { createLogger, getChannelService } = require('../services');
 
 const log = createLogger('DeviceHandler');
+
+/**
+ * Helper function to update a device approval card in the channel
+ * Uses context.updateActivity() first (most reliable in invoke handlers),
+ * then falls back to channelService.updateApprovalCard()
+ * @param {string} deviceId - The device ID
+ * @param {Object} updatedCard - The updated Adaptive Card content
+ * @param {Object} context - The Teams context
+ */
+async function tryUpdateDeviceCard(deviceId, updatedCard, context) {
+  // replyToId is the activity ID of the card being interacted with
+  const activityId = context?.activity?.replyToId;
+  
+  if (!activityId) {
+    log.debug(`No replyToId found for device ${deviceId}`);
+    return false;
+  }
+
+  log.debug(`Updating device card ${deviceId}`, { activityId });
+
+  // Method 1: Try context.updateActivity() directly (most reliable in invoke handlers)
+  if (context && typeof context.updateActivity === 'function') {
+    try {
+      const updateActivity = {
+        type: 'message',
+        id: activityId,
+        attachments: [{
+          contentType: 'application/vnd.microsoft.card.adaptive',
+          content: updatedCard,
+        }],
+      };
+      
+      await context.updateActivity(updateActivity);
+      log.info('Updated device card via context.updateActivity()', { deviceId, activityId });
+      return true;
+    } catch (contextError) {
+      log.debug('context.updateActivity() failed, trying fallback', contextError.message);
+    }
+  }
+
+  // Method 2: Fallback to channel service
+  const channelService = getChannelService();
+  if (!channelService) {
+    log.debug('Channel service not available');
+    return false;
+  }
+
+  const success = await channelService.updateApprovalCard(activityId, updatedCard);
+  if (success) {
+    log.info('Updated device card via channelService', { deviceId, activityId });
+    return true;
+  }
+
+  log.debug('Failed to update device card in channel');
+  return false;
+}
 
 /**
  * Get approver info from activity
@@ -30,7 +87,9 @@ function getApproverInfo(activity) {
 /**
  * Build an "already processed" card when the device request was handled elsewhere
  */
-function buildAlreadyProcessedCard(username, deviceId) {
+function buildAlreadyProcessedCard(username, deviceId, checkedBy) {
+  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -50,7 +109,7 @@ function buildAlreadyProcessedCard(username, deviceId) {
       },
       {
         type: 'TextBlock',
-        text: 'This device approval request for **' + username + '** has already been processed by another admin or has expired.',
+        text: 'This device approval request for **' + username + '** has already been approved or denied from another platform (Keeper Vault or another integration).',
         wrap: true,
         spacing: 'Medium',
       },
@@ -58,7 +117,9 @@ function buildAlreadyProcessedCard(username, deviceId) {
         type: 'FactSet',
         facts: [
           { title: 'Device ID', value: deviceId },
-          { title: 'Status', value: 'Already Processed' },
+          { title: 'Status', value: 'Already Processed (approved/denied elsewhere)' },
+          { title: 'Checked by', value: checkedBy || 'Admin' },
+          { title: 'Updated', value: timestamp },
         ],
         spacing: 'Medium',
       },
@@ -68,7 +129,7 @@ function buildAlreadyProcessedCard(username, deviceId) {
 
 /**
  * Handle approval of a device request
- * Returns Adaptive Card for in-place update
+ * Returns Adaptive Card for in-place update and updates channel card for all users
  */
 async function handleDeviceApproval(context, data) {
   const approver = getApproverInfo(context.activity);
@@ -90,25 +151,28 @@ async function handleDeviceApproval(context, data) {
     };
   }
   
-  log.debug('Approving device', deviceId);
+  log.info('Approving device', { deviceId, deviceName, username, approver: approver.name });
   
   const result = await keeperClient.approveDevice(deviceId);
   
+  log.info('Device approval result', { deviceId, success: result.success, already_processed: result.already_processed, error: result.error });
+  
+  let updatedCard;
+  
   if (result.success) {
-    // Return approved card for in-place update
-    return cards.buildDeviceApprovedCard(
+    log.info('Device approved successfully', { deviceId, approver: approver.name });
+    updatedCard = cards.buildDeviceApprovedCard(
       approver.name,
       deviceName,
       username,
       deviceId
     );
   } else if (result.already_processed) {
-    // Return "already processed" card
-    log.debug('Device already processed', deviceId);
-    return buildAlreadyProcessedCard(username, deviceId);
+    log.info('Device already processed elsewhere', { deviceId });
+    updatedCard = buildAlreadyProcessedCard(username, deviceId, approver.name);
   } else {
     // Return error card
-    return {
+    updatedCard = {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
       version: '1.4',
@@ -127,11 +191,20 @@ async function handleDeviceApproval(context, data) {
       ],
     };
   }
+  
+  // Update the channel card for all users
+  try {
+    await tryUpdateDeviceCard(deviceId, updatedCard, context);
+  } catch (updateError) {
+    log.debug('Could not update channel card', updateError.message);
+  }
+  
+  return updatedCard;
 }
 
 /**
  * Handle denial of a device request
- * Returns Adaptive Card for in-place update
+ * Returns Adaptive Card for in-place update and updates channel card for all users
  */
 async function handleDeviceDenial(context, data) {
   const approver = getApproverInfo(context.activity);
@@ -153,25 +226,28 @@ async function handleDeviceDenial(context, data) {
     };
   }
   
-  log.debug('Denying device', deviceId);
+  log.info('Denying device', { deviceId, deviceName, username, approver: approver.name });
   
   const result = await keeperClient.denyDevice(deviceId);
   
+  log.info('Device denial result', { deviceId, success: result.success, already_processed: result.already_processed, error: result.error });
+  
+  let updatedCard;
+  
   if (result.success) {
-    // Return denied card for in-place update
-    return cards.buildDeviceDeniedCard(
+    log.info('Device denied successfully', { deviceId, approver: approver.name });
+    updatedCard = cards.buildDeviceDeniedCard(
       approver.name,
       deviceName,
       username,
       deviceId
     );
   } else if (result.already_processed) {
-    // Return "already processed" card
-    log.debug('Device already processed', deviceId);
-    return buildAlreadyProcessedCard(username, deviceId);
+    log.info('Device already processed elsewhere', { deviceId });
+    updatedCard = buildAlreadyProcessedCard(username, deviceId, approver.name);
   } else {
     // Return error card
-    return {
+    updatedCard = {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
       version: '1.4',
@@ -190,6 +266,15 @@ async function handleDeviceDenial(context, data) {
       ],
     };
   }
+  
+  // Update the channel card for all users
+  try {
+    await tryUpdateDeviceCard(deviceId, updatedCard, context);
+  } catch (updateError) {
+    log.debug('Could not update channel card', updateError.message);
+  }
+  
+  return updatedCard;
 }
 
 /**

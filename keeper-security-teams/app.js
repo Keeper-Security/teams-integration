@@ -300,7 +300,8 @@ app.on("invoke", async (context) => {
     
     if (verb === 'lookup_record' || verb === 'lookup_folder' || verb === 'lookup_share') {
       try {
-        const searchQuery = activity.value?.action?.data?.searchQuery || 
+        const searchQuery = activity.value?.searchQuery ||
+                            activity.value?.action?.data?.searchQuery || 
                             activity.value?.data?.searchQuery ||
                             data.searchQuery || '';
         log.debug(`Processing ${verb} for query: ${searchQuery}`);

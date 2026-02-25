@@ -19,12 +19,8 @@ function buildDeviceApprovalCard({
   created,
 }) {
   const facts = [
-    { title: 'User', value: username || email || 'Unknown' },
+    { title: 'User Email', value: email || username || 'Unknown' },
   ];
-  
-  if (email && email !== username) {
-    facts.push({ title: 'Email', value: email });
-  }
   
   if (deviceName) {
     facts.push({ title: 'Device', value: deviceName });
@@ -50,6 +46,20 @@ function buildDeviceApprovalCard({
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
+    // Refresh property enables auto-refresh for all users when message is edited
+    // Omitting userIds enables auto-refresh for ALL users in channels with <60 members
+    refresh: {
+      action: {
+        type: 'Action.Execute',
+        verb: 'refreshDeviceCard',
+        data: {
+          action: 'refreshDeviceCard',
+          deviceId: deviceId,
+          deviceName: deviceName,
+          username: username || email,
+        },
+      },
+    },
     body: [
       {
         type: 'Container',
