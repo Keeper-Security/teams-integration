@@ -254,10 +254,69 @@ class KeeperClient {
   }
 
   /**
+   * Get the current permission level a user has on a record
+   * @param {string} recordUid - Record UID
+   * @param {string} userEmail - User's email
+   * @returns {Promise<{permission: string, isOwner: boolean}|null>} - Permission info or null if no access
+   */
+  async getRecordUserPermission(recordUid, userEmail) {
+    try {
+      const command = 'get --format=json ' + shellEscapeSearch(recordUid);
+      const result = await this._executeCommandAsync(command, 30);
+      
+      if (!result || result.status !== 'success') {
+        log.debug('Get record details failed', result?.message);
+        return null;
+      }
+      
+      const data = result.data;
+      if (!data) {
+        log.debug('No data in get result for record', recordUid);
+        return null;
+      }
+      
+      // Check user_permissions for the specific user
+      const userPermissions = data.user_permissions || [];
+      const emailLower = userEmail.toLowerCase();
+      
+      for (const userPerm of userPermissions) {
+        const permEmail = (userPerm.username || userPerm.email || '').toLowerCase();
+        if (permEmail === emailLower) {
+          const isOwner = userPerm.owner === true;
+          const canEdit = userPerm.editable === true || userPerm.can_edit === true;
+          const canShare = userPerm.shareable === true || userPerm.can_share === true;
+          
+          let permission;
+          if (isOwner) {
+            permission = 'owner';
+          } else if (canEdit && canShare) {
+            permission = 'edit_and_share';
+          } else if (canShare) {
+            permission = 'can_share';
+          } else if (canEdit) {
+            permission = 'can_edit';
+          } else {
+            permission = 'view_only';
+          }
+          
+          log.debug('Found record permission for user', { userEmail, permission, isOwner });
+          return { permission, isOwner };
+        }
+      }
+      
+      log.debug('No permission found for user on record', { recordUid, userEmail });
+      return null;
+    } catch (error) {
+      log.error('Error getting record user permission', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Get the current permission level a user has on a folder
    * @param {string} folderUid - Folder UID
    * @param {string} userEmail - User's email
-   * @returns {Promise<{manageUsers: boolean, manageRecords: boolean}|null>} - Permission flags or null
+   * @returns {Promise<{permission: string, manageUsers: boolean, manageRecords: boolean}|null>} - Permission info or null
    */
   async getFolderUserPermission(folderUid, userEmail) {
     try {
@@ -284,8 +343,21 @@ class KeeperClient {
         if (permEmail === emailLower) {
           const manageUsers = userPerm.manage_users === true;
           const manageRecords = userPerm.manage_records === true;
-          log.debug('Found folder permission for user', { userEmail, manageUsers, manageRecords });
-          return { manageUsers, manageRecords };
+          
+          // Determine permission level string
+          let permission;
+          if (manageUsers && manageRecords) {
+            permission = 'manage_all';
+          } else if (manageUsers) {
+            permission = 'can_manage_users';
+          } else if (manageRecords) {
+            permission = 'can_manage_records';
+          } else {
+            permission = 'no_permissions';
+          }
+          
+          log.debug('Found folder permission for user', { userEmail, permission, manageUsers, manageRecords });
+          return { permission, manageUsers, manageRecords };
         }
       }
       
@@ -295,6 +367,74 @@ class KeeperClient {
       log.error('Error getting folder user permission', error.message);
       return null;
     }
+  }
+
+  /**
+   * Check if current record permission is equal to or higher than requested
+   * Permission hierarchy: view_only < can_edit < can_share < edit_and_share < owner
+   */
+  _hasEqualOrHigherRecordPermission(currentPermission, requestedPermission) {
+    const hierarchy = {
+      'view_only': 1,
+      'can_edit': 2,
+      'can_share': 3,
+      'edit_and_share': 4,
+      'owner': 5,
+    };
+    
+    const currentLevel = hierarchy[currentPermission] || 0;
+    const requestedLevel = hierarchy[requestedPermission] || 0;
+    
+    // Only return true if user has EXACT SAME permission (not higher)
+    // This allows upgrading or downgrading permissions via approval
+    return currentLevel === requestedLevel;
+  }
+
+  /**
+   * Check if current folder permission is equal to or higher than requested
+   * Permission hierarchy: no_permissions < can_manage_records < can_manage_users < manage_all
+   */
+  _hasEqualOrHigherFolderPermission(currentPermission, requestedPermission) {
+    const hierarchy = {
+      'no_permissions': 1,
+      'can_manage_records': 2,
+      'can_manage_users': 3,
+      'manage_all': 4,
+    };
+    
+    const currentLevel = hierarchy[currentPermission] || 0;
+    const requestedLevel = hierarchy[requestedPermission] || 0;
+    
+    // Only return true if user has EXACT SAME permission (not higher)
+    // This allows upgrading or downgrading permissions via approval
+    return currentLevel === requestedLevel;
+  }
+
+  /**
+   * Get human-readable label for record permission
+   */
+  _getRecordPermissionLabel(permission) {
+    const labels = {
+      'view_only': 'View Only',
+      'can_edit': 'Can Edit',
+      'can_share': 'Can Share',
+      'edit_and_share': 'Can Edit & Share',
+      'owner': 'Owner',
+    };
+    return labels[permission] || permission;
+  }
+
+  /**
+   * Get human-readable label for folder permission
+   */
+  _getFolderPermissionLabel(permission) {
+    const labels = {
+      'no_permissions': 'No Permissions (View Only)',
+      'can_manage_records': 'Can Manage Records',
+      'can_manage_users': 'Can Manage Users',
+      'manage_all': 'Manage Users & Records',
+    };
+    return labels[permission] || permission;
   }
 
   // ==================== Access Grant Operations ====================
@@ -310,6 +450,38 @@ class KeeperClient {
           error: `Cannot modify permissions for record owner (${userEmail}). The user already owns this record and has full access to it.`,
           isOwnerError: true,
         };
+      }
+      
+      // Check if user already has equal or higher permission (skip for change_owner)
+      if (permission !== 'change_owner') {
+        const currentPermission = await this.getRecordUserPermission(recordUid, userEmail);
+        if (currentPermission) {
+          if (currentPermission.isOwner) {
+            log.info('User is already the owner of this record', { recordUid, userEmail });
+            return {
+              success: false,
+              alreadyHasAccess: true,
+              currentPermission: 'owner',
+              currentPermissionLabel: this._getRecordPermissionLabel('owner'),
+              error: `User (${userEmail}) is already the owner of this record with full access.`,
+            };
+          }
+          
+          if (this._hasEqualOrHigherRecordPermission(currentPermission.permission, permission)) {
+            log.info('User already has equal or higher permission on record', { 
+              recordUid, userEmail, 
+              currentPermission: currentPermission.permission, 
+              requestedPermission: permission 
+            });
+            return {
+              success: false,
+              alreadyHasAccess: true,
+              currentPermission: currentPermission.permission,
+              currentPermissionLabel: this._getRecordPermissionLabel(currentPermission.permission),
+              error: `User (${userEmail}) already has "${this._getRecordPermissionLabel(currentPermission.permission)}" access to this record.`,
+            };
+          }
+        }
       }
       
       if (permission === 'change_owner') {
@@ -430,16 +602,43 @@ class KeeperClient {
 
   async grantFolderAccess(folderUid, userEmail, permission, durationSeconds = 86400) {
     try {
-      // Check if user already has manage_all permission (cannot be downgraded)
+      // Check if user already has permission on this folder
       const currentPermission = await this.getFolderUserPermission(folderUid, userEmail);
-      if (currentPermission && currentPermission.manageUsers && currentPermission.manageRecords) {
-        // User has manage_all - check if trying to downgrade
-        if (permission !== 'manage_all') {
-          log.info('Cannot downgrade folder permission from manage_all', { folderUid, userEmail, requestedPermission: permission });
+      if (currentPermission) {
+        // Check if user has manage_all - cannot be downgraded
+        if (currentPermission.manageUsers && currentPermission.manageRecords) {
+          if (permission !== 'manage_all') {
+            log.info('Cannot downgrade folder permission from manage_all', { folderUid, userEmail, requestedPermission: permission });
+            return {
+              success: false,
+              error: `Cannot modify permissions for user (${userEmail}). The user already has "Manage Users and Records" permission on this folder and cannot be downgraded.`,
+              isFullAccessError: true,
+            };
+          }
+          // User already has manage_all and requesting manage_all - already has access
+          log.info('User already has manage_all permission on folder', { folderUid, userEmail });
           return {
             success: false,
-            error: `Cannot modify permissions for user (${userEmail}). The user already has "Manage Users and Records" permission on this folder and cannot be downgraded.`,
-            isFullAccessError: true,
+            alreadyHasAccess: true,
+            currentPermission: currentPermission.permission,
+            currentPermissionLabel: this._getFolderPermissionLabel(currentPermission.permission),
+            error: `User (${userEmail}) already has "${this._getFolderPermissionLabel(currentPermission.permission)}" access to this folder.`,
+          };
+        }
+        
+        // Check if user already has equal or higher permission
+        if (this._hasEqualOrHigherFolderPermission(currentPermission.permission, permission)) {
+          log.info('User already has equal or higher permission on folder', { 
+            folderUid, userEmail, 
+            currentPermission: currentPermission.permission, 
+            requestedPermission: permission 
+          });
+          return {
+            success: false,
+            alreadyHasAccess: true,
+            currentPermission: currentPermission.permission,
+            currentPermissionLabel: this._getFolderPermissionLabel(currentPermission.permission),
+            error: `User (${userEmail}) already has "${this._getFolderPermissionLabel(currentPermission.permission)}" access to this folder.`,
           };
         }
       }
@@ -1073,6 +1272,17 @@ class KeeperClient {
           await this._sleep(pollInterval);
           elapsed += pollInterval;
           pollInterval = Math.min(pollInterval * 1.5, maxPollInterval);
+        } else if (error.response?.status === 400 || error.response?.status === 500) {
+          // Capture error response data - may contain invitation messages
+          const errorData = error.response?.data || {};
+          log.debug('Polling error with response data', { status: error.response?.status, data: errorData });
+          return {
+            status: 'error',
+            message: errorData.message || errorData.error || error.message,
+            error: errorData.error || errorData.message || error.message,
+            httpStatus: error.response?.status,
+            data: errorData
+          };
         } else {
           log.error('Polling error', error.message);
           return null;

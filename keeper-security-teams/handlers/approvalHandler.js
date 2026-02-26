@@ -395,8 +395,38 @@ async function handleRecordApproval(context, data) {
       }
     }
   } else {
-    // Check if this is a permission conflict error
-    if (isPermissionConflictError(result.error)) {
+    // Check if user already has equal or higher access
+    if (result.alreadyHasAccess) {
+      log.info('User already has access to record', { recordUid, requesterEmail, currentPermission: result.currentPermission });
+      
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const alreadyHasAccessCard = cards.buildRecordAlreadyHasAccessCard({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        recordTitle: recordTitle,
+        recordUid: recordUid,
+        justification: justification,
+        currentPermission: result.currentPermission,
+        currentPermissionLabel: result.currentPermissionLabel,
+        approverName: approver.name,
+        processedTime: processedTime,
+      });
+      
+      try {
+        await tryUpdateApprovalCard(approvalId, alreadyHasAccessCard, context);
+        log.debug('Updated approval card with already has access status');
+      } catch (updateError) {
+        log.debug('Failed to update card, sending message instead', updateError.message);
+        await context.send({
+          type: 'message',
+          attachments: [{
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: alreadyHasAccessCard,
+          }],
+        });
+      }
+    } else if (isPermissionConflictError(result.error)) {
       log.info('Permission conflict detected for record approval', { recordUid, requesterEmail, error: result.error });
       
       // Send DM to approver explaining the conflict
@@ -698,8 +728,38 @@ async function handleFolderApproval(context, data) {
       }
     }
   } else {
-    // Check if user already has full access (manage_all) and cannot be downgraded - check FIRST
-    if (result.isFullAccessError) {
+    // Check if user already has equal or higher access
+    if (result.alreadyHasAccess) {
+      log.info('User already has access to folder', { folderUid, requesterEmail, currentPermission: result.currentPermission });
+      
+      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const alreadyHasAccessCard = cards.buildFolderAlreadyHasAccessCard({
+        approvalId: approvalId,
+        requesterName: requesterName,
+        requesterEmail: requesterEmail,
+        folderName: folderName,
+        folderUid: folderUid,
+        justification: justification,
+        currentPermission: result.currentPermission,
+        currentPermissionLabel: result.currentPermissionLabel,
+        approverName: approver.name,
+        processedTime: processedTime,
+      });
+      
+      try {
+        await tryUpdateApprovalCard(approvalId, alreadyHasAccessCard, context);
+        log.debug('Updated approval card with already has access status');
+      } catch (updateError) {
+        log.debug('Failed to update card, sending message instead', updateError.message);
+        await context.send({
+          type: 'message',
+          attachments: [{
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: alreadyHasAccessCard,
+          }],
+        });
+      }
+    } else if (result.isFullAccessError) {
       log.info('Folder full access error detected', { folderUid, requesterEmail });
       
       // Send DM to approver explaining the situation
@@ -1098,6 +1158,35 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
+        // Check if user already has equal or higher access
+        if (result.alreadyHasAccess) {
+          log.info('User already has access to record', { recordUid, requesterEmail, currentPermission: result.currentPermission });
+          
+          // Build "already has access" card
+          const alreadyHasAccessCard = cards.buildRecordAlreadyHasAccessCard({
+            approvalId,
+            requesterName,
+            requesterEmail,
+            recordTitle,
+            recordUid,
+            justification: data.justification || '',
+            currentPermission: result.currentPermission,
+            currentPermissionLabel: result.currentPermissionLabel,
+            approverName: approver.name,
+            processedTime,
+          });
+          
+          // Update the channel card for all users
+          try {
+            await tryUpdateApprovalCard(approvalId, alreadyHasAccessCard, context);
+            log.debug('Updated channel card with already has access status');
+          } catch (updateError) {
+            log.debug('Could not update channel card', updateError.message);
+          }
+          
+          return { updatedCard: alreadyHasAccessCard };
+        }
+        
         // Check if this is an owner error
         if (result.isOwnerError || isRecordOwnerError(result.error)) {
           log.info('Record owner error detected in Universal Action', { recordUid, requesterEmail });
@@ -1276,6 +1365,35 @@ async function routeApprovalActionWithCardResponse(context, data) {
       );
       
       if (!result.success) {
+        // Check if user already has equal or higher access
+        if (result.alreadyHasAccess) {
+          log.info('User already has access to folder', { folderUid, requesterEmail, currentPermission: result.currentPermission });
+          
+          // Build "already has access" card
+          const alreadyHasAccessCard = cards.buildFolderAlreadyHasAccessCard({
+            approvalId,
+            requesterName,
+            requesterEmail,
+            folderName,
+            folderUid,
+            justification: data.justification || '',
+            currentPermission: result.currentPermission,
+            currentPermissionLabel: result.currentPermissionLabel,
+            approverName: approver.name,
+            processedTime,
+          });
+          
+          // Update the channel card for all users
+          try {
+            await tryUpdateApprovalCard(approvalId, alreadyHasAccessCard, context);
+            log.debug('Updated channel card with already has access status');
+          } catch (updateError) {
+            log.debug('Could not update channel card', updateError.message);
+          }
+          
+          return { updatedCard: alreadyHasAccessCard };
+        }
+        
         // Check if user already has full access (manage_all) and cannot be downgraded - check FIRST
         if (result.isFullAccessError) {
           log.info('Folder full access error detected in Universal Action', { folderUid, requesterEmail });

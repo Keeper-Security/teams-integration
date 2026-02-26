@@ -830,6 +830,110 @@ function buildRecordInvitationSentCard({
   };
 }
 
+/**
+ * Build a card for when user already has access to the record
+ */
+function buildRecordAlreadyHasAccessCard({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  recordTitle,
+  recordUid,
+  justification,
+  currentPermission,
+  currentPermissionLabel,
+  approverName,
+  processedTime,
+}) {
+  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { 
+        type: 'TextBlock', 
+        text: 'User Already Has Access', 
+        weight: 'Bolder', 
+        size: 'ExtraLarge',
+        color: 'Warning'
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: requesterName || 'Unknown', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Record:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: recordTitle || recordUid || 'Unknown', color: 'Warning', size: 'Medium' },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: approvalId || 'N/A', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Current Permission:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: currentPermissionLabel || currentPermission || 'Unknown', color: 'Good', size: 'Medium', weight: 'Bolder' },
+            ],
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        style: 'warning',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: 'NO ACTION NEEDED', 
+            weight: 'Bolder', 
+            size: 'Large', 
+            horizontalAlignment: 'Center' 
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: `The user "${requesterEmail || requesterName}" already has "${currentPermissionLabel || currentPermission}" access to this record.`, 
+            wrap: true,
+            weight: 'Bolder'
+          },
+          { 
+            type: 'TextBlock', 
+            text: 'No further action is required. The user can already access this record with the indicated permission level.',
+            wrap: true,
+            isSubtle: true
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        spacing: 'Medium',
+        items: [
+          { 
+            type: 'TextBlock', 
+            text: `Checked by: ${approverName || 'Unknown'} at ${time}`, 
+            size: 'Small', 
+            isSubtle: true,
+            horizontalAlignment: 'Right'
+          },
+        ],
+      },
+    ],
+    actions: [],
+  };
+}
+
 module.exports = {
   buildRecordApprovalCard,
   buildRecordSearchResultsCard,
@@ -838,4 +942,5 @@ module.exports = {
   buildRecordCreationCard,
   buildRecordCreatedCard,
   buildRecordInvitationSentCard,
+  buildRecordAlreadyHasAccessCard,
 };
