@@ -12,13 +12,14 @@
         "dev:teamsfx": "env-cmd --silent -f .localConfigs npm run dev",
         "dev:teamsfx:testtool": "env-cmd --silent -f .localConfigs.playground npm run dev",
         "dev:teamsfx:launch-testtool": "env-cmd --silent -f env/.env.playground agentsplayground start",
-        "dev": "nodemon --inspect=9239 --signal SIGINT --ignore data/ ./index.js",
-        "start": "node ./index.js",
-        "watch": "nodemon ./index.js",
+        "dev": "NODE_TLS_REJECT_UNAUTHORIZED=0 nodemon --inspect=9239 --signal SIGINT --ignore data/ ./index.js",
+        "start": "NODE_TLS_REJECT_UNAUTHORIZED=0 node ./index.js",
+        "watch": "NODE_TLS_REJECT_UNAUTHORIZED=0 nodemon ./index.js",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
     "dependencies": {
         "@azure/identity": "^4.11.1",
+        "@keeper-security/secrets-manager-core": "^17.4.0",
         "@microsoft/teams.apps": "^2.0.0",
         "@microsoft/teams.common": "^2.0.0",
         "axios": "^1.6.0",

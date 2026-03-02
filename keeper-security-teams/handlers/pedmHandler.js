@@ -188,12 +188,10 @@ async function handlePedmApproval(context, data) {
     };
   }
   
-  // Update the channel card for all users
-  try {
-    await tryUpdatePedmCard(approvalUid, updatedCard, context);
-  } catch (updateError) {
-    log.debug('Could not update channel card', updateError.message);
-  }
+  // Update the channel card for all users (non-blocking to avoid Teams timeout)
+  tryUpdatePedmCard(approvalUid, updatedCard, context)
+    .then(() => log.debug('Updated PEDM card via channelService'))
+    .catch(err => log.debug('Could not update channel card', err.message));
   
   return updatedCard;
 }
@@ -263,12 +261,10 @@ async function handlePedmDenial(context, data) {
     };
   }
   
-  // Update the channel card for all users
-  try {
-    await tryUpdatePedmCard(approvalUid, updatedCard, context);
-  } catch (updateError) {
-    log.debug('Could not update channel card', updateError.message);
-  }
+  // Update the channel card for all users (non-blocking to avoid Teams timeout)
+  tryUpdatePedmCard(approvalUid, updatedCard, context)
+    .then(() => log.debug('Updated PEDM card via channelService'))
+    .catch(err => log.debug('Could not update channel card', err.message));
   
   return updatedCard;
 }

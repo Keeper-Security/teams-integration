@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { MicrosoftAppCredentials, ConnectorClient } = require('botframework-connector');
-const config = require('../config');
+const { getConfig } = require('../config');
 const { createLogger } = require('./logger');
 
 const log = createLogger('ChannelService');
@@ -212,6 +212,8 @@ const connectorClients = new Map();
  */
 function getConnectorClient(serviceUrl) {
   if (!connectorClients.has(serviceUrl)) {
+    const config = getConfig();
+    
     // Trust the service URL (required for Teams)
     MicrosoftAppCredentials.trustServiceUrl(serviceUrl);
     
@@ -369,6 +371,7 @@ function extractConversationReference(activity) {
  * @returns {boolean}
  */
 function isApprovalsChannel(activity) {
+  const config = getConfig();
   const approvalsChannelId = config.teams?.approvalsChannelId;
   
   if (!approvalsChannelId) {
@@ -402,6 +405,7 @@ function isTeamsChannel(activity) {
 class ChannelService {
   constructor(app) {
     this.app = app;
+    const config = getConfig();
     this.appId = process.env.CLIENT_ID || config.MicrosoftAppId;
   }
 
@@ -540,7 +544,7 @@ class ChannelService {
 
   /**
    * Send an Adaptive Card to the approvals channel using Teams SDK app.send()
-   * Then use Bot Connector Client to get the activity ID for later updates
+   * Stores the activity ID mapping for later card updates
    * @param {Object} card - Adaptive Card object
    * @param {string} approvalId - The approval request ID (for storing activity ID mapping)
    * @param {string} [preText] - Optional text to show before card
@@ -574,10 +578,10 @@ class ChannelService {
       }
 
       // Use Teams SDK app.send() for sending (this works for proactive messaging)
-      const conversationId = approvalsRef.conversation.id;
+      const conversationId = approvalsRef.conversationId || approvalsRef.conversation?.id;
       const response = await this.app.send(conversationId, activity);
       
-      log.debug('app.send() response', { response, type: typeof response });
+      log.debug('app.send() response', { response, type: typeof response, approvalId });
       
       // Try to extract activity ID from response
       let activityId = null;
@@ -599,18 +603,18 @@ class ChannelService {
         }
       }
       
-      log.debug('Final extracted activityId', activityId);
+      log.debug('Final extracted activityId', { activityId, approvalId });
       
       if (approvalId && activityId) {
         storeApprovalActivityId(approvalId, activityId);
-        log.debug(`Stored activity mapping: ${approvalId} -> ${activityId}`);
+        log.info(`Stored activity mapping: ${approvalId} -> ${activityId}`);
       } else {
-        log.warn('Could not store activity mapping - no activityId returned');
+        log.warn('Could not store activity mapping - no activityId returned', { approvalId });
       }
       
       return { success: true, activityId: activityId };
     } catch (error) {
-      log.error('Error sending via app.send()', error.message);
+      log.error('Error sending via app.send()', { message: error.message, approvalId });
       return { success: false, activityId: null };
     }
   }
@@ -723,6 +727,7 @@ class ChannelService {
    * @returns {boolean}
    */
   isApprovalsChannelReady() {
+    const config = getConfig();
     const hasConfig = !!config.teams?.approvalsChannelId;
     const hasReference = !!getConversationReference('approvals');
     return hasConfig && hasReference;
@@ -733,6 +738,7 @@ class ChannelService {
    * @returns {Object}
    */
   getStatus() {
+    const config = getConfig();
     return {
       approvalsChannelConfigured: !!config.teams?.approvalsChannelId,
       approvalsChannelId: config.teams?.approvalsChannelId || 'Not configured',

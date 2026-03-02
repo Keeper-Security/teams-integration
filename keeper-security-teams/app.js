@@ -10,7 +10,7 @@ const { App } = require("@microsoft/teams.apps");
 const { LocalStorage } = require("@microsoft/teams.common");
 const { ManagedIdentityCredential } = require("@azure/identity");
 
-const config = require("./config");
+const { getConfig } = require("./config");
 const handlers = require("./handlers");
 const { PedmPoller, DevicePoller } = require("./background");
 const { initializeChannelService, getChannelService, isApprovalsChannel, createLogger } = require("./services");
@@ -41,7 +41,7 @@ const tokenCredentials = {
 };
 
 const credentialOptions =
-  config.MicrosoftAppType === "UserAssignedMsi" ? { ...tokenCredentials } : undefined;
+  getConfig().MicrosoftAppType === "UserAssignedMsi" ? { ...tokenCredentials } : undefined;
 
 // ==================== Create Teams App ====================
 
@@ -138,12 +138,13 @@ app.on("message", async (context) => {
   }
 
   if (text === "/runtime") {
+    const currentConfig = getConfig();
     const runtime = {
       nodeversion: process.version,
       sdkversion: "2.0.0",
-      keeperServiceUrl: config.keeper.serviceUrl,
-      pedmEnabled: config.pedm.enabled,
-      deviceApprovalEnabled: config.deviceApproval.enabled,
+      keeperServiceUrl: currentConfig.keeper.serviceUrl,
+      pedmEnabled: currentConfig.pedm.enabled,
+      deviceApprovalEnabled: currentConfig.deviceApproval.enabled,
     };
     await context.send(JSON.stringify(runtime, null, 2));
     return;
@@ -635,6 +636,23 @@ app.on("invoke", async (context) => {
           };
         }
         
+        if (result && result.error) {
+          log.error('approve_selected_record returned error', result.error);
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: {
+              type: 'AdaptiveCard',
+              '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+              version: '1.4',
+              body: [
+                { type: 'TextBlock', text: 'Approval Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+                { type: 'TextBlock', text: result.error || 'An error occurred.', wrap: true },
+              ],
+            },
+          };
+        }
+        
         return { statusCode: 200 };
       } catch (error) {
         log.error('Error handling approve_selected_record', error);
@@ -688,6 +706,23 @@ app.on("invoke", async (context) => {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
             value: result.updatedCard,
+          };
+        }
+        
+        if (result && result.error) {
+          log.error('approve_selected_folder returned error', result.error);
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: {
+              type: 'AdaptiveCard',
+              '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+              version: '1.4',
+              body: [
+                { type: 'TextBlock', text: 'Approval Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+                { type: 'TextBlock', text: result.error || 'An error occurred.', wrap: true },
+              ],
+            },
           };
         }
         
@@ -747,6 +782,23 @@ app.on("invoke", async (context) => {
           };
         }
         
+        if (result && result.error) {
+          log.error('approve_selected_share returned error', result.error);
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: {
+              type: 'AdaptiveCard',
+              '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+              version: '1.4',
+              body: [
+                { type: 'TextBlock', text: 'Share Creation Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+                { type: 'TextBlock', text: result.error || 'An error occurred.', wrap: true },
+              ],
+            },
+          };
+        }
+        
         return { statusCode: 200 };
       } catch (error) {
         log.error('Error handling approve_selected_share', error);
@@ -786,13 +838,32 @@ app.on("invoke", async (context) => {
         
         const result = await handlers.routeApprovalActionWithCardResponse(context, data);
         
-        log.debug(`Action ${action} completed, returning updated card`);
+        log.debug(`Action ${action} completed`, { hasCard: !!result?.updatedCard, hasError: !!result?.error });
         
         if (result && result.updatedCard) {
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
             value: result.updatedCard,
+          };
+        }
+        
+        if (result && result.error) {
+          log.error(`Action ${action} returned error`, result.error);
+          const errorCard = {
+            type: 'AdaptiveCard',
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            version: '1.4',
+            body: [
+              { type: 'TextBlock', text: 'Action Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
+              { type: 'TextBlock', text: result.error || 'An error occurred while processing the request.', wrap: true },
+            ],
+            actions: result.keepCardActive ? [] : [],
+          };
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: errorCard,
           };
         }
         
@@ -913,13 +984,14 @@ let pedmPoller = null;
 let devicePoller = null;
 
 const startPollers = () => {
-  if (config.pedm.enabled) {
+  const currentConfig = getConfig();
+  if (currentConfig.pedm.enabled) {
     pedmPoller = new PedmPoller(app);
     pedmPoller.start();
     log.info('EPM poller started');
   }
 
-  if (config.deviceApproval.enabled) {
+  if (currentConfig.deviceApproval.enabled) {
     devicePoller = new DevicePoller(app);
     devicePoller.start();
     log.info('Device approval poller started');
@@ -955,7 +1027,8 @@ app.start = async (...args) => {
   log.info('='.repeat(60));
   
   const keeperClient = require('./services/keeperClient');
-  const serviceUrl = config.keeper?.serviceUrl || process.env.KEEPER_SERVICE_URL || 'http://localhost:3001/api/v2/';
+  const currentConfig = getConfig();
+  const serviceUrl = currentConfig.keeper?.serviceUrl || 'http://localhost:3001/api/v2/';
   
   try {
     const isHealthy = await keeperClient.healthCheck();

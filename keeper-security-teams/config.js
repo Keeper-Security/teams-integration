@@ -1,97 +1,192 @@
 /**
  * Configuration for Keeper Teams App
- * 
- * Configuration is loaded from environment variables.
- * Required variables should be set in .env file or environment.
  */
 
-const config = {
-  // ==================== Teams/Bot Configuration ====================
-  MicrosoftAppId: process.env.CLIENT_ID,
-  MicrosoftAppType: process.env.BOT_TYPE,
-  MicrosoftAppTenantId: process.env.TENANT_ID,
-  MicrosoftAppPassword: process.env.CLIENT_SECRET,
+const fs = require('fs');
+const path = require('path');
 
-  // ==================== Keeper Configuration ====================
-  keeper: {
-    /**
-     * URL of Keeper Commander Service Mode server
-     * Example: http://localhost:3001/api/v2/
-     */
-    serviceUrl: process.env.KEEPER_SERVICE_URL || 'http://localhost:3001/api/v2/',
-    
-    /**
-     * API key for authenticating with Service Mode (if required)
-     */
-    apiKey: process.env.KEEPER_API_KEY || null,
-  },
+let ksmService = null;
+let configInitialized = false;
+let cachedConfig = null;
 
-  // ==================== Teams Channel Configuration ====================
-  teams: {
-    /**
-     * Channel ID where approval requests are posted
-     * This should be a dedicated approvals channel
-     * 
-     * HOW TO GET:
-     * 1. Right-click the channel in Teams → "Get link to channel"
-     * 2. The channel ID is in the URL after "channel/"
-     * 3. Or send "/channel-status" to the bot in the channel to capture it
-     * 
-     * Example: 19:abc123def456@thread.tacv2
-     */
-    approvalsChannelId: process.env.APPROVALS_CHANNEL_ID || null,
-    
-    /**
-     * Team ID containing the approvals channel (needed for proactive messages)
-     * 
-     * HOW TO GET:
-     * 1. Right-click the team in Teams → "Get link to team"
-     * 2. The team ID is the "groupId" parameter in the URL
-     * 
-     * Example: 12345678-1234-1234-1234-123456789abc
-     */
-    approvalsTeamId: process.env.APPROVALS_TEAM_ID || null,
-  },
+function loadKsmService() {
+  if (ksmService !== null) return ksmService;
+  
+  try {
+    ksmService = require('./services/ksmService');
+    return ksmService;
+  } catch (error) {
+    ksmService = false;
+    return null;
+  }
+}
 
-  // ==================== EPM (Endpoint Privilege Manager) Configuration ====================
-  pedm: {
-    /**
-     * Whether EPM polling is enabled
-     */
-    enabled: process.env.EPM_ENABLED === 'true',
-    
-    /**
-     * Polling interval in milliseconds (env var is in seconds, default: 120 seconds)
-     */
-    pollingInterval: (parseInt(process.env.EPM_POLL_INTERVAL) || 120) * 1000,
-  },
+/**
+ * Load configuration from KSM if available
+ */
+async function loadFromKsm() {
+  const ksm = loadKsmService();
+  if (!ksm) return null;
+  
+  // Check for KSM config sources
+  let ksmConfig = null;
+  let commanderRecord = null;
+  let teamsRecord = null;
+  
+  // Check Docker secrets first
+  const dockerKsmPath = '/run/secrets/ksm-config';
+  const dockerCommanderPath = '/run/secrets/commander-record';
+  const dockerTeamsPath = '/run/secrets/teams-record';
+  
+  if (fs.existsSync(dockerKsmPath)) {
+    try {
+      ksmConfig = fs.readFileSync(dockerKsmPath, 'utf8').trim();
+    } catch (error) {
+      console.warn('Failed to read KSM config from Docker secret:', error.message);
+    }
+  }
+  
+  if (fs.existsSync(dockerCommanderPath)) {
+    try {
+      commanderRecord = fs.readFileSync(dockerCommanderPath, 'utf8').trim();
+    } catch (error) {
+      console.warn('Failed to read commander record from Docker secret:', error.message);
+    }
+  }
+  
+  if (fs.existsSync(dockerTeamsPath)) {
+    try {
+      teamsRecord = fs.readFileSync(dockerTeamsPath, 'utf8').trim();
+    } catch (error) {
+      console.warn('Failed to read teams record from Docker secret:', error.message);
+    }
+  }
+  
+  // Fallback to environment variables
+  if (!ksmConfig) ksmConfig = process.env.KSM_CONFIG;
+  if (!commanderRecord) commanderRecord = process.env.COMMANDER_RECORD || 'CSMD config';
+  if (!teamsRecord) teamsRecord = process.env.TEAMS_RECORD || 'CSMD teams config';
+  
+  // If no KSM config, skip KSM loading
+  if (!ksmConfig) {
+    return null;
+  }
+  
+  try {
+    const ksmData = await ksm.fetchCredentialsFromKsm(
+      ksmConfig,
+      commanderRecord,
+      teamsRecord
+    );
+    return ksmData;
+  } catch (error) {
+    console.error('Failed to load from KSM:', error.message);
+    return null;
+  }
+}
 
-  // ==================== Device Approval Configuration ====================
-  deviceApproval: {
-    /**
-     * Whether device approval polling is enabled
-     */
-    enabled: process.env.DEVICE_APPROVAL_ENABLED === 'true',
-    
-    /**
-     * Polling interval in milliseconds (env var is in seconds, default: 120 seconds)
-     */
-    pollingInterval: (parseInt(process.env.DEVICE_POLL_INTERVAL) || 120) * 1000,
-  },
+/**
+ * Build configuration object from KSM data and environment variables
+ * KSM values take precedence over environment variables
+ */
+function buildConfig(ksmData = null) {
+  const ksm = ksmData || {};
+  
+  return {
+    // ==================== Teams/Bot Configuration ====================
+    MicrosoftAppId: ksm.teams?.clientId || process.env.CLIENT_ID,
+    MicrosoftAppType: ksm.teams?.botType || process.env.BOT_TYPE || 'MultiTenant',
+    MicrosoftAppTenantId: ksm.teams?.tenantId || process.env.TENANT_ID,
+    MicrosoftAppPassword: ksm.teams?.clientSecret || process.env.CLIENT_SECRET,
 
-  // ==================== Feature Flags ====================
-  features: {
-    /**
-     * Require approval for one-time shares (vs direct creation)
-     * Default: true (always require approval)
-     */
-    requireShareApproval: process.env.REQUIRE_SHARE_APPROVAL !== 'false', // Enabled by default
+    // ==================== Keeper Configuration ====================
+    keeper: {
+      serviceUrl: ksm.keeper?.serviceUrl || process.env.KEEPER_SERVICE_URL || 'http://localhost:3001/api/v2/',
+      apiKey: ksm.keeper?.apiKey || process.env.KEEPER_API_KEY || null,
+    },
+
+    // ==================== Teams Channel Configuration ====================
+    teams: {
+      approvalsChannelId: ksm.teams?.approvalsChannelId || process.env.APPROVALS_CHANNEL_ID || null,
+      approvalsTeamId: ksm.teams?.approvalsTeamId || process.env.APPROVALS_TEAM_ID || null,
+    },
+
+    // ==================== EPM (Endpoint Privilege Manager) Configuration ====================
+    pedm: {
+      enabled: ksm.pedm?.enabled ?? (process.env.EPM_ENABLED === 'true'),
+      pollingInterval: ((ksm.pedm?.pollingInterval || parseInt(process.env.EPM_POLL_INTERVAL)) || 120) * 1000,
+    },
+
+    // ==================== Device Approval Configuration ====================
+    deviceApproval: {
+      enabled: ksm.deviceApproval?.enabled ?? (process.env.DEVICE_APPROVAL_ENABLED === 'true'),
+      pollingInterval: ((ksm.deviceApproval?.pollingInterval || parseInt(process.env.DEVICE_POLL_INTERVAL)) || 120) * 1000,
+    },
+
+    // ==================== Feature Flags ====================
+    features: {
+      requireShareApproval: process.env.REQUIRE_SHARE_APPROVAL !== 'false',
+      enableSearch: process.env.ENABLE_SEARCH !== 'false',
+    },
     
-    /**
-     * Enable search commands
-     */
-    enableSearch: process.env.ENABLE_SEARCH !== 'false', // Enabled by default
-  },
+    // ==================== KSM Status ====================
+    ksm: {
+      enabled: !!ksmData,
+      loadedSections: ksmData ? Object.keys(ksmData) : [],
+    },
+  };
+}
+
+
+async function initializeConfig() {
+  if (configInitialized) {
+    return cachedConfig;
+  }
+  
+  // Try to load from KSM
+  const ksmData = await loadFromKsm();
+  
+  // Build and cache config
+  cachedConfig = buildConfig(ksmData);
+  configInitialized = true;
+  
+  // Log configuration source
+  if (cachedConfig.ksm.enabled) {
+    console.log(`[Config] Loaded from KSM: ${cachedConfig.ksm.loadedSections.join(', ')}`);
+  } else {
+    console.log('[Config] Loaded from environment variables');
+  }
+  
+  return cachedConfig;
+}
+
+
+function getConfig() {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+  
+  // Return default config from environment (for backwards compatibility)
+  return buildConfig(null);
+}
+
+/**
+ * Reset configuration (for testing)
+ */
+function resetConfig() {
+  configInitialized = false;
+  cachedConfig = null;
+}
+
+
+const defaultConfig = buildConfig(null);
+
+module.exports = {
+  // New async API
+  initializeConfig,
+  getConfig,
+  resetConfig,
+  
+  // Backwards compatible: spread default config at module level
+  ...defaultConfig,
 };
-
-module.exports = config;

@@ -192,12 +192,10 @@ async function handleDeviceApproval(context, data) {
     };
   }
   
-  // Update the channel card for all users
-  try {
-    await tryUpdateDeviceCard(deviceId, updatedCard, context);
-  } catch (updateError) {
-    log.debug('Could not update channel card', updateError.message);
-  }
+  // Update the channel card for all users (non-blocking to avoid Teams timeout)
+  tryUpdateDeviceCard(deviceId, updatedCard, context)
+    .then(() => log.debug('Updated device card via channelService'))
+    .catch(err => log.debug('Could not update channel card', err.message));
   
   return updatedCard;
 }
@@ -267,12 +265,10 @@ async function handleDeviceDenial(context, data) {
     };
   }
   
-  // Update the channel card for all users
-  try {
-    await tryUpdateDeviceCard(deviceId, updatedCard, context);
-  } catch (updateError) {
-    log.debug('Could not update channel card', updateError.message);
-  }
+  // Update the channel card for all users (non-blocking to avoid Teams timeout)
+  tryUpdateDeviceCard(deviceId, updatedCard, context)
+    .then(() => log.debug('Updated device card via channelService'))
+    .catch(err => log.debug('Could not update channel card', err.message));
   
   return updatedCard;
 }

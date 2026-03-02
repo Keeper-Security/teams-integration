@@ -49,26 +49,43 @@ services:
       - "${BOT_PORT:-3978}:3978"
       - "${HEALTH_PORT:-3979}:3979"
     environment:
-      # Azure Bot Configuration (from Azure Portal)
-      - CLIENT_ID=${CLIENT_ID}
-      - CLIENT_SECRET=${CLIENT_SECRET}
-      - TENANT_ID=${TENANT_ID}
+      # ==================== KSM Configuration (Recommended for Production) ====================
+      # When KSM is configured, credentials are fetched from Keeper Vault
+      # This is more secure than storing credentials in environment variables
+      
+      # KSM Configuration - Base64 encoded KSM config or file path
+      - KSM_CONFIG=${KSM_CONFIG:-}
+      
+      # KSM Record Titles (or UIDs) for credential lookup
+      - COMMANDER_RECORD=${COMMANDER_RECORD:-CSMD config}
+      - TEAMS_RECORD=${TEAMS_RECORD:-CSMD teams config}
+      
+      # ==================== Fallback: Azure Bot Configuration ====================
+      # These are used if KSM is not configured (for local development)
+      - CLIENT_ID=${CLIENT_ID:-}
+      - CLIENT_SECRET=${CLIENT_SECRET:-}
+      - TENANT_ID=${TENANT_ID:-}
       - BOT_TYPE=${BOT_TYPE:-MultiTenant}
       
-      # Keeper Service Mode Connection
-      # Uses Docker internal network to connect to commander service
+      # ==================== Fallback: Keeper Service Mode Connection ====================
+      # Used if KSM is not configured
       - KEEPER_SERVICE_URL=http://commander:8900/api/v2/
-      - KEEPER_API_KEY=${KEEPER_API_KEY}
+      - KEEPER_API_KEY=${KEEPER_API_KEY:-}
       
-      # Teams Channel Configuration
-      - APPROVALS_CHANNEL_ID=${APPROVALS_CHANNEL_ID}
-      - APPROVALS_TEAM_ID=${APPROVALS_TEAM_ID}
+      # ==================== Fallback: Teams Channel Configuration ====================
+      # Used if KSM is not configured
+      - APPROVALS_CHANNEL_ID=${APPROVALS_CHANNEL_ID:-}
+      - APPROVALS_TEAM_ID=${APPROVALS_TEAM_ID:-}
       
-      # Optional Features
+      # ==================== Optional Features ====================
       - EPM_ENABLED=${EPM_ENABLED:-false}
       - DEVICE_APPROVAL_ENABLED=${DEVICE_APPROVAL_ENABLED:-false}
       - EPM_POLL_INTERVAL=${EPM_POLL_INTERVAL:-120}
       - DEVICE_POLL_INTERVAL=${DEVICE_POLL_INTERVAL:-120}
+      
+      # ==================== TLS Configuration ====================
+      # Set to 0 for environments with corporate proxies (e.g., Zscaler)
+      - NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED:-1}
     depends_on:
       commander:
         condition: service_healthy

@@ -6,7 +6,7 @@
 
 const axios = require('axios');
 const { ManagedIdentityCredential, ClientSecretCredential } = require('@azure/identity');
-const config = require('../config');
+const { getConfig } = require('../config');
 const { createLogger } = require('./logger');
 
 const log = createLogger('GraphService');
@@ -25,21 +25,24 @@ class GraphService {
    */
   getCredential() {
     if (!this.credential) {
+      // Get current config (with KSM data if initialized)
+      const config = getConfig();
+      
       // Check if we're in local dev (has CLIENT_PASSWORD or CLIENT_SECRET) or production (Managed Identity)
       // Support both CLIENT_PASSWORD (from config) and CLIENT_SECRET (from env directly)
       const clientSecret = config.MicrosoftAppPassword || process.env.CLIENT_SECRET;
       
       if (clientSecret && config.MicrosoftAppTenantId) {
-        // Local development: Use Client Secret
-        log.debug('Using ClientSecretCredential for local development');
+        // Local development / Docker: Use Client Secret
+        log.info('Using ClientSecretCredential for authentication');
         this.credential = new ClientSecretCredential(
           config.MicrosoftAppTenantId,
           config.MicrosoftAppId,
           clientSecret
         );
       } else {
-        // Production: Use Managed Identity
-        log.debug('Using ManagedIdentityCredential for production');
+        // Production (Azure): Use Managed Identity
+        log.info('Using ManagedIdentityCredential for production');
         this.credential = new ManagedIdentityCredential({
           clientId: config.MicrosoftAppId,
         });

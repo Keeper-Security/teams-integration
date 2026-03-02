@@ -6,6 +6,7 @@ const keeperClient = require('./keeperClient');
 const { KeeperClient } = require('./keeperClient');
 const graphService = require('./graphService');
 const { createLogger } = require('./logger');
+const ksmService = require('./ksmService');
 const {
   ChannelService,
   initializeChannelService,
@@ -27,6 +28,7 @@ module.exports = {
   KeeperClient,
   graphService,
   createLogger,
+  ksmService,
   ChannelService,
   initializeChannelService,
   getChannelService,

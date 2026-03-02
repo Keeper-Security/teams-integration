@@ -6,19 +6,21 @@
  */
 
 const keeperClient = require('../services/keeperClient');
-const { getChannelService, createLogger } = require('../services');
+const { getChannelService, storeApprovalActivityId, createLogger } = require('../services');
 const cards = require('../cards');
-const config = require('../config');
+const { getConfig } = require('../config');
 
 const log = createLogger('DevicePoller');
 
 class DevicePoller {
   constructor(teamsApp) {
     this.teamsApp = teamsApp;
+    const config = getConfig();
     this.interval = config.deviceApproval?.pollingInterval || 120000;
     this.enabled = config.deviceApproval?.enabled || false;
     this.timer = null;
-    this.processedDevices = new Map(); // Track already-posted devices with timestamps
+    this.processedDevices = new Map(); 
+    this.deviceToApprovalId = new Map();
     this.consecutiveErrors = 0;
     this.maxErrors = 3;
   }
@@ -93,12 +95,22 @@ class DevicePoller {
   }
 
   /**
+   * Generate a unique approval ID for tracking
+   */
+  generateApprovalId() {
+    return 'dev_' + Math.random().toString(36).substring(2, 10);
+  }
+
+  /**
    * Post a device approval card to the approvals channel
    */
   async postApprovalCard(device) {
     const deviceId = device.device_id || device.deviceId || device.id;
     
-    log.debug('Posting card for', deviceId);
+    log.debug('Posting card for device', { deviceId });
+    
+    // Generate a unique approval ID for this device card
+    const approvalId = this.generateApprovalId();
     
     const card = cards.buildDeviceApprovalCard({
       deviceId: deviceId,
@@ -109,6 +121,7 @@ class DevicePoller {
       ipAddress: device.ip_address || device.ipAddress || device.ip,
       location: device.location,
       created: device.created || device.timestamp,
+      approvalId: approvalId, // Include approvalId in card data for tracking
     });
     
     // Use ChannelService to send to approvals channel
@@ -118,17 +131,20 @@ class DevicePoller {
       const deviceName = device.device_name || device.deviceName || device.name || 'Unknown Device';
       const userEmail = device.email || device.user_email || 'Unknown User';
       
-      const sent = await channelService.sendApprovalCard(
+      // Use sendApprovalCardViaConnector to get proper activity ID
+      const result = await channelService.sendApprovalCardViaConnector(
         card,
+        approvalId,
         `**Device Approval Request** - ${deviceName} (${userEmail})`
       );
       
-      if (sent) {
-        log.debug('Card posted to approvals channel', deviceId);
+      if (result.success) {
+        log.info('Card posted to approvals channel', { deviceId, approvalId, activityId: result.activityId });
+        this.deviceToApprovalId.set(deviceId, approvalId);
         this.consecutiveErrors = 0;
         return true;
       } else {
-        log.warn('Failed to post card to channel', deviceId);
+        log.warn('Failed to post card to channel', { deviceId });
         this.consecutiveErrors++;
         return false;
       }
@@ -148,6 +164,7 @@ class DevicePoller {
     for (const [id, timestamp] of this.processedDevices) {
       if (now - timestamp > maxAge) {
         this.processedDevices.delete(id);
+        this.deviceToApprovalId.delete(id); // Also clean up approval ID mapping
         cleaned++;
       }
     }

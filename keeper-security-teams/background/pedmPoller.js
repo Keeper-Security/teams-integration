@@ -6,21 +6,14 @@
  */
 
 const keeperClient = require('../services/keeperClient');
-const { getChannelService, createLogger } = require('../services');
+const { getChannelService, storeApprovalActivityId, createLogger } = require('../services');
 const cards = require('../cards');
-const config = require('../config');
+const { getConfig } = require('../config');
 
 const log = createLogger('PedmPoller');
 
-/**
- * Parse PEDM request data from API response
- * Extracts fields from account_info and application_info arrays
- * 
- * @param {Object} data - Raw PEDM request data from API
- * @returns {Object} - Parsed PEDM request with flat properties
- */
+
 function parsePedmRequest(data) {
-  // Extract username from account_info array
   let username = '';
   const accountInfo = data.account_info || [];
   for (const info of accountInfo) {
@@ -71,6 +64,7 @@ function parsePedmRequest(data) {
 class PedmPoller {
   constructor(teamsApp) {
     this.teamsApp = teamsApp;
+    const config = getConfig();
     this.interval = config.pedm?.pollingInterval || 120000;
     this.enabled = config.pedm?.enabled || false;
     this.timer = null;
@@ -155,7 +149,10 @@ class PedmPoller {
     // Parse the request to extract fields from arrays
     const request = parsePedmRequest(rawRequest);
     
-    log.debug('Posting card for', request.approvalUid);
+    // Use approval_uid as the approvalId for activity tracking
+    const approvalId = 'epm_' + (request.approvalUid || Math.random().toString(36).substring(2, 10));
+    
+    log.debug('Posting card for', { approvalUid: request.approvalUid, approvalId });
     log.debug('Parsed request', { approvalUid: request.approvalUid, username: request.username, agentUid: request.agentUid });
     
     const card = cards.buildPedmApprovalCard({
@@ -176,17 +173,19 @@ class PedmPoller {
     const channelService = getChannelService();
     
     if (channelService && channelService.isApprovalsChannelReady()) {
-      const sent = await channelService.sendApprovalCard(
+      // Use sendApprovalCardViaConnector to get proper activity ID
+      const result = await channelService.sendApprovalCardViaConnector(
         card,
+        approvalId,
         `**Endpoint Privilege Manager Request** from ${request.username}`
       );
       
-      if (sent) {
-        log.debug('Card posted to approvals channel', request.approvalUid);
+      if (result.success) {
+        log.info('Card posted to approvals channel', { approvalUid: request.approvalUid, approvalId, activityId: result.activityId });
         this.consecutiveErrors = 0;
         return true;
       } else {
-        log.warn('Failed to post card to channel', request.approvalUid);
+        log.warn('Failed to post card to channel', { approvalUid: request.approvalUid });
         this.consecutiveErrors++;
         return false;
       }

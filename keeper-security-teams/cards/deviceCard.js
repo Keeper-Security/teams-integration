@@ -17,6 +17,7 @@ function buildDeviceApprovalCard({
   ipAddress,
   location,
   created,
+  approvalId,
 }) {
   const facts = [
     { title: 'User Email', value: email || username || 'Unknown' },
@@ -57,6 +58,7 @@ function buildDeviceApprovalCard({
           deviceId: deviceId,
           deviceName: deviceName,
           username: username || email,
+          approvalId: approvalId,
         },
       },
     },
@@ -99,6 +101,7 @@ function buildDeviceApprovalCard({
           deviceId: deviceId,
           deviceName: deviceName,
           username: username || email,
+          approvalId: approvalId,
         },
       },
       {
@@ -111,6 +114,7 @@ function buildDeviceApprovalCard({
           deviceId: deviceId,
           deviceName: deviceName,
           username: username || email,
+          approvalId: approvalId,
         },
       },
     ],
