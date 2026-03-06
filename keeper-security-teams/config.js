@@ -101,7 +101,7 @@ function buildConfig(ksmData = null) {
 
     // ==================== Keeper Configuration ====================
     keeper: {
-      serviceUrl: ksm.keeper?.serviceUrl || process.env.KEEPER_SERVICE_URL || 'http://localhost:3001/api/v2/',
+      serviceUrl: ksm.keeper?.serviceUrl || process.env.KEEPER_SERVICE_URL || 'http://localhost:8900/api/v2/',
       apiKey: ksm.keeper?.apiKey || process.env.KEEPER_API_KEY || null,
     },
 

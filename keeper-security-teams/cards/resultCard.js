@@ -682,7 +682,7 @@ function buildRequesterNotificationCard({
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.5',
     body: body,
   };
 }

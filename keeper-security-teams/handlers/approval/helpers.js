@@ -94,7 +94,7 @@ function buildInvitationNotificationCard({ recordTitle, itemType, permission, ap
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { 
         type: 'TextBlock', 
@@ -147,7 +147,7 @@ function buildPermissionConflictCard({ itemTitle, itemType, requesterName, reque
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { 
         type: 'TextBlock', 
@@ -268,6 +268,15 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
   throw new Error('Failed to update channel card');
 }
 
+/**
+ * Get current timestamp formatted for display
+ * Returns format: "YYYY-MM-DD HH:MM:SS"
+ * @returns {string} Formatted timestamp
+ */
+function getCurrentTimestamp() {
+  return new Date().toISOString().replace('T', ' ').substring(0, 19);
+}
+
 module.exports = {
   DURATION_MAP,
   RECORD_PERMANENT_PERMISSIONS,
@@ -279,4 +288,5 @@ module.exports = {
   buildPermissionConflictCard,
   getApproverInfo,
   tryUpdateApprovalCard,
+  getCurrentTimestamp,
 };

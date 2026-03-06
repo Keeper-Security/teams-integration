@@ -1,7 +1,7 @@
 /**
- * PEDM (Privileged Elevation & Delegation Management) Poller
+ * EPM (Endpoint Privilege Manager) Poller
  * 
- * Background service that periodically polls for pending PEDM requests
+ * Background service that periodically polls for pending EPM requests
  * and posts them to the approvals channel in Teams.
  */
 
@@ -10,16 +10,35 @@ const { getChannelService, storeApprovalActivityId, createLogger } = require('..
 const cards = require('../cards');
 const { getConfig } = require('../config');
 
-const log = createLogger('PedmPoller');
+const log = createLogger('EpmPoller');
 
+/**
+ * Extract value from a key=value string if it matches the prefix
+ * Handles values that may contain '=' characters
+ * @param {string} str - The string to parse (e.g., "FilePath=C:\Program Files\app.exe")
+ * @param {string} prefix - The prefix to match (e.g., "FilePath=")
+ * @returns {string|null} The extracted value or null if prefix doesn't match
+ */
+function extractValue(str, prefix) {
+  if (str.startsWith(prefix)) {
+    return str.slice(prefix.length) || '';
+  }
+  return null;
+}
 
-function parsePedmRequest(data) {
+/**
+ * Parse EPM request data from API response
+ */
+function parseEpmRequest(data) {
   let username = '';
   const accountInfo = data.account_info || [];
   for (const info of accountInfo) {
-    if (typeof info === 'string' && info.startsWith('Username=')) {
-      username = info.split('=')[1] || '';
-      break;
+    if (typeof info === 'string') {
+      const value = extractValue(info, 'Username=');
+      if (value !== null) {
+        username = value;
+        break;
+      }
     }
   }
   
@@ -33,15 +52,10 @@ function parsePedmRequest(data) {
   for (const info of applicationInfo) {
     if (typeof info !== 'string') continue;
     
-    if (info.startsWith('Description=')) {
-      description = info.split('=').slice(1).join('=') || '';
-    } else if (info.startsWith('FileName=')) {
-      fileName = info.split('=').slice(1).join('=') || '';
-    } else if (info.startsWith('FilePath=')) {
-      filePath = info.split('=').slice(1).join('=') || '';
-    } else if (info.startsWith('CommandLine=')) {
-      command = info.split('=').slice(1).join('=') || '';
-    }
+    description = extractValue(info, 'Description=') ?? description;
+    fileName = extractValue(info, 'FileName=') ?? fileName;
+    filePath = extractValue(info, 'FilePath=') ?? filePath;
+    command = extractValue(info, 'CommandLine=') ?? command;
   }
   
   // Return parsed request with fallbacks to direct properties
@@ -61,99 +75,139 @@ function parsePedmRequest(data) {
   };
 }
 
-class PedmPoller {
+class EpmPoller {
   constructor(teamsApp) {
     this.teamsApp = teamsApp;
     const config = getConfig();
     this.interval = config.pedm?.pollingInterval || 120000;
     this.enabled = config.pedm?.enabled || false;
     this.timer = null;
-    this.processedRequests = new Map(); // Track already-posted requests with timestamps
+    this.seenRequestIds = new Set(); // Track seen request IDs (cleared when no longer pending)
     this.consecutiveErrors = 0;
     this.maxErrors = 3;
   }
 
   /**
-   * Start the polling service
+   * Start the EPM polling service
    */
   start() {
     if (!this.enabled) {
-      log.info('Disabled in config');
+      log.info('EPM polling is disabled in config');
       return;
     }
 
-    log.info(`Starting with interval: ${this.interval}ms`);
+    log.info(`EPM poller starting with interval: ${this.interval}ms`);
     
     // Run immediately on start
     this.poll();
     
     // Then run on interval
     this.timer = setInterval(() => this.poll(), this.interval);
-    
-    // Cleanup old entries every hour
-    setInterval(() => this.cleanup(), 3600000);
   }
 
   /**
-   * Stop the polling service
+   * Stop the EPM polling service
    */
   stop() {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      log.info('Stopped');
+      log.info('EPM poller stopped');
     }
   }
 
   /**
-   * Poll for pending PEDM requests
+   * Poll for pending EPM requests
+   * Uses Slack-style approach: relies on Keeper API as source of truth.
+   * Once a request is approved/denied, it won't appear in pending list.
    */
   async poll() {
-    log.debug('Polling for pending requests...');
+    log.info('Polling for pending EPM requests...');
     
     try {
       const requests = await keeperClient.getPendingPedmRequests();
       
-      if (!requests || requests.length === 0) {
-        log.debug('No pending requests');
+      // null/undefined means API failure - keep seen list intact
+      if (requests === null || requests === undefined) {
+        log.debug('EPM API failed/timed out, keeping seen list intact');
         return;
       }
       
-      log.debug(`Found ${requests.length} pending requests`);
+      // No pending requests - clear the seen list
+      if (requests.length === 0) {
+        if (this.seenRequestIds.size > 0) {
+          log.debug('No pending EPM requests, clearing seen list');
+          this.seenRequestIds.clear();
+        }
+        log.info('No pending EPM requests found');
+        return;
+      }
+      
+      log.info(`Found ${requests.length} pending EPM requests`);
+      
+      // Track current pending IDs and identify new requests
+      const currentIds = new Set();
+      const newRequests = [];
       
       for (const request of requests) {
         const requestId = request.approval_uid || request.approvalUid || request.id;
         
         if (!requestId) {
-          log.debug('Skipping request without ID');
+          log.debug('Skipping EPM request without ID');
           continue;
         }
         
-        if (this.processedRequests.has(requestId)) {
-          log.debug('Already processed', requestId);
-          continue;
-        }
+        currentIds.add(requestId);
         
-        await this.postApprovalCard(request);
-        this.processedRequests.set(requestId, Date.now());
+        // Check if this is a NEW request
+        if (!this.seenRequestIds.has(requestId)) {
+          newRequests.push(request);
+          this.seenRequestIds.add(requestId);
+          log.info('New EPM request detected', { requestId });
+        }
       }
+      
+      // Post only NEW requests to Teams
+      if (newRequests.length > 0) {
+        log.info(`Posting ${newRequests.length} new EPM request(s) to Teams`);
+        for (const request of newRequests) {
+          await this.postApprovalCard(request);
+        }
+      }
+      
+      // Cleanup: remove IDs that are no longer pending (processed elsewhere)
+      const removedIds = [...this.seenRequestIds].filter(id => !currentIds.has(id));
+      if (removedIds.length > 0) {
+        log.debug(`Cleaning up ${removedIds.length} resolved EPM request(s)`);
+        for (const id of removedIds) {
+          this.seenRequestIds.delete(id);
+        }
+      }
+      
+      this.consecutiveErrors = 0;
     } catch (error) {
-      log.error('Error polling', error.message);
+      this.consecutiveErrors++;
+      log.error(`Error occurred while EPM polling (${this.consecutiveErrors}/${this.maxErrors})`, error.message);
+      
+      if (this.consecutiveErrors >= this.maxErrors) {
+        log.warn('EPM polling stopped due to consecutive errors (feature may not be available)');
+        this.stop();
+      }
     }
   }
 
   /**
-   * Post a PEDM approval card to the approvals channel
+   * Post an EPM approval card to the approvals channel
    */
   async postApprovalCard(rawRequest) {
     // Parse the request to extract fields from arrays
-    const request = parsePedmRequest(rawRequest);
+    const request = parseEpmRequest(rawRequest);
     
     // Use approval_uid as the approvalId for activity tracking
     const approvalId = 'epm_' + (request.approvalUid || Math.random().toString(36).substring(2, 10));
     
-    log.debug('Posting card for', { approvalUid: request.approvalUid, approvalId });
-    log.debug('Parsed request', { approvalUid: request.approvalUid, username: request.username, agentUid: request.agentUid });
+    log.info('Posting EPM approval card', { approvalUid: request.approvalUid, approvalId });
+    log.debug('Parsed EPM request', { approvalUid: request.approvalUid, username: request.username, agentUid: request.agentUid });
     
     const card = cards.buildPedmApprovalCard({
       approvalUid: request.approvalUid,
@@ -181,38 +235,19 @@ class PedmPoller {
       );
       
       if (result.success) {
-        log.info('Card posted to approvals channel', { approvalUid: request.approvalUid, approvalId, activityId: result.activityId });
+        log.info('EPM card posted to approvals channel', { approvalUid: request.approvalUid, approvalId, activityId: result.activityId });
         this.consecutiveErrors = 0;
         return true;
       } else {
-        log.warn('Failed to post card to channel', { approvalUid: request.approvalUid });
+        log.warn('Failed to post EPM card to channel', { approvalUid: request.approvalUid });
         this.consecutiveErrors++;
         return false;
       }
     } else {
-      log.warn('Approvals channel not ready - card not sent');
+      log.warn('Approvals channel not ready - EPM card not sent');
       return false;
-    }
-  }
-
-  /**
-   * Clean up old processed requests (to prevent memory leak)
-   */
-  cleanup(maxAge = 86400000) { // Default: 24 hours
-    const now = Date.now();
-    let cleaned = 0;
-    
-    for (const [id, timestamp] of this.processedRequests) {
-      if (now - timestamp > maxAge) {
-        this.processedRequests.delete(id);
-        cleaned++;
-      }
-    }
-    
-    if (cleaned > 0) {
-      log.debug(`Cleaned up ${cleaned} old entries`);
     }
   }
 }
 
-module.exports = PedmPoller;
+module.exports = EpmPoller;

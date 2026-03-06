@@ -83,9 +83,6 @@ services:
       - EPM_POLL_INTERVAL=${EPM_POLL_INTERVAL:-120}
       - DEVICE_POLL_INTERVAL=${DEVICE_POLL_INTERVAL:-120}
       
-      # ==================== TLS Configuration ====================
-      # Set to 0 for environments with corporate proxies (e.g., Zscaler)
-      - NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED:-1}
     depends_on:
       commander:
         condition: service_healthy

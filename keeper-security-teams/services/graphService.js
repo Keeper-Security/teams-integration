@@ -14,8 +14,7 @@ const log = createLogger('GraphService');
 class GraphService {
   constructor() {
     this.credential = null;
-    this.tokenCache = new Map(); // Simple in-memory token cache
-    this.tokenExpiry = new Map(); // Track token expiry
+    this.tokenCache = new Map(); // Token cache: cacheKey → { token, expiry }
   }
 
   /**
@@ -58,13 +57,12 @@ class GraphService {
    */
   async getAccessToken(tenantId = null) {
     const cacheKey = tenantId || 'default';
-    const cachedToken = this.tokenCache.get(cacheKey);
-    const expiry = this.tokenExpiry.get(cacheKey);
+    const cached = this.tokenCache.get(cacheKey);
     
     // Return cached token if still valid (with 5 minute buffer)
-    if (cachedToken && expiry && Date.now() < expiry - 300000) {
+    if (cached && Date.now() < cached.expiry - 300000) {
       log.debug('Using cached token');
-      return cachedToken;
+      return cached.token;
     }
 
     log.debug('Acquiring new access token...');
@@ -77,30 +75,12 @@ class GraphService {
       
       const tokenResponse = await credential.getToken(scopes, options);
 
-      // Decode token to see what roles/permissions we got (for debugging)
-      try {
-        const tokenParts = tokenResponse.token.split('.');
-        if (tokenParts.length === 3) {
-          const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
-          // For application permissions, check 'roles' field
-          // For delegated permissions, check 'scp' field
-          const roles = payload.roles || [];
-          const scopesInToken = payload.scp || [];
-          log.debug('Token roles (application permissions)', roles.length > 0 ? roles : 'None');
-          log.debug('Token scopes (delegated permissions)', scopesInToken.length > 0 ? scopesInToken : 'None');
-          if (roles.length === 0 && scopesInToken.length === 0) {
-            log.warn('Token has no roles or scopes!');
-          }
-        }
-      } catch (decodeError) {
-        // Ignore decode errors, just for debugging
-        log.debug('Could not decode token for debugging');
-      }
-
       // Cache the token (tokens typically expire in 1 hour)
       const expiresIn = (tokenResponse.expiresOnTimestamp - Date.now()) || 3600000;
-      this.tokenCache.set(cacheKey, tokenResponse.token);
-      this.tokenExpiry.set(cacheKey, Date.now() + expiresIn);
+      this.tokenCache.set(cacheKey, {
+        token: tokenResponse.token,
+        expiry: Date.now() + expiresIn,
+      });
 
       log.debug('Successfully acquired access token');
       return tokenResponse.token;
@@ -147,7 +127,6 @@ class GraphService {
           if (error.response?.status === 403 && retryCount < maxRetries) {
             log.debug('Got 403 (Authorization denied), clearing token cache and retrying...');
             this.tokenCache.delete(cacheKey);
-            this.tokenExpiry.delete(cacheKey);
             retryCount++;
             continue; // Retry with fresh token
           }
@@ -213,7 +192,6 @@ class GraphService {
   clearTokenCache(tenantId = null) {
     const cacheKey = tenantId || 'default';
     this.tokenCache.delete(cacheKey);
-    this.tokenExpiry.delete(cacheKey);
     log.debug('Token cache cleared for', cacheKey);
   }
 }

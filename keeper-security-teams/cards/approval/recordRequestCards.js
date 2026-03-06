@@ -3,11 +3,12 @@
  * Cards for record access requests, search results, and confirmations
  */
 
-const { RECORD_PERMISSIONS, DURATION_OPTIONS, SELF_DESTRUCT_DURATION_OPTIONS } = require('../constants');
+const { RECORD_PERMISSIONS, DURATION_OPTIONS, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
 const { 
   buildSearchCardHeader, 
   buildNoResultsSection, 
-  formatPermissionLabel 
+  formatPermissionLabel,
+  getCurrentTimestamp,
 } = require('../cardHelpers');
 const { sanitizeHyperlinks } = require('../../utils/helpers');
 
@@ -27,7 +28,7 @@ function buildRecordApprovalCard({
   isUid = true,
   identifier,
 }) {
-  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const requestedTime = getCurrentTimestamp();
   
   // Sanitize identifier and justification to prevent URL injection
   const safeIdentifier = sanitizeHyperlinks(identifier || recordTitle);
@@ -36,7 +37,7 @@ function buildRecordApprovalCard({
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Record Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
@@ -112,7 +113,7 @@ function buildRecordApprovalCard({
       { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: DURATION_OPTIONS },
+      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: DURATION_OPTIONS },
       { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
     );
     
@@ -188,7 +189,7 @@ function buildRecordSearchResultsCard({
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [...headerElements],
     actions: [],
   };
@@ -305,12 +306,12 @@ function buildRecordApprovalCardWithStatus({
     containerStyle = 'attention';
   }
   
-  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = processedTime || getCurrentTimestamp();
   
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Record Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
@@ -457,7 +458,7 @@ function buildRecordConfirmationCard({
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Record Selected - Ready to Approve', weight: 'Bolder', size: 'Large', color: 'Good' },
       {
@@ -605,14 +606,14 @@ function buildRecordCreationCard({
     
     // Self-destruct duration dropdown
     { type: 'TextBlock', text: 'Delete After (only applies if self-destruct is enabled)', weight: 'Bolder', spacing: 'Small' },
-    { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: '24h', choices: SELF_DESTRUCT_DURATION_OPTIONS },
+    { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: DEFAULT_DURATION, choices: SELF_DESTRUCT_DURATION_OPTIONS },
     { type: 'TextBlock', text: 'This duration is ignored if self-destruct is not enabled above.', size: 'Small', isSubtle: true, wrap: true, color: 'Attention' },
   );
   
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: bodyElements,
     actions: [
       {
@@ -660,7 +661,7 @@ function buildRecordCreatedCard({
   return {
     type: 'AdaptiveCard',
     '$schema': 'https://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       ...headerElements,
       {
@@ -730,12 +731,12 @@ function buildRecordInvitationSentCard({
   approverName,
   processedTime,
 }) {
-  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = processedTime || getCurrentTimestamp();
   
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { 
         type: 'TextBlock', 
@@ -845,12 +846,12 @@ function buildRecordAlreadyHasAccessCard({
   approverName,
   processedTime,
 }) {
-  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = processedTime || getCurrentTimestamp();
   
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { 
         type: 'TextBlock', 
@@ -934,6 +935,90 @@ function buildRecordAlreadyHasAccessCard({
   };
 }
 
+/**
+ * Build a "Processing" card shown immediately when approval is clicked
+ * This card is returned immediately to avoid Teams timeout, while the actual grant happens in background
+ */
+function buildRecordProcessingCard({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  recordTitle,
+  justification,
+  permission,
+  duration,
+  approverName,
+  processedTime,
+}) {
+  const time = processedTime || getCurrentTimestamp();
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.5',
+    body: [
+      { type: 'TextBlock', text: 'Record Access Request', weight: 'Bolder', size: 'ExtraLarge' },
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: requesterName || 'Unknown', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Record:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: recordTitle || 'Unknown', color: 'Warning', size: 'Medium' },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: approvalId || 'N/A', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Justification:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: justification || 'No justification provided', wrap: true, size: 'Medium' },
+            ],
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        style: 'emphasis',
+        items: [
+          { type: 'TextBlock', text: 'APPROVED - Processing...', weight: 'Bolder', size: 'Large', horizontalAlignment: 'Center', color: 'Good' },
+          { type: 'TextBlock', text: 'Granting access to user. Please wait...', size: 'Small', horizontalAlignment: 'Center', isSubtle: true },
+          { type: 'TextBlock', text: `By: ${approverName || 'Unknown'} at ${time}`, size: 'Small', horizontalAlignment: 'Center', isSubtle: true },
+        ],
+      },
+      {
+        type: 'ColumnSet',
+        spacing: 'Medium',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatPermissionLabel(permission), size: 'Small' }] },
+        ],
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Duration:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: duration || '24h', size: 'Small' }] },
+        ],
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Granted To:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: requesterEmail || 'Unknown', size: 'Small' }] },
+        ],
+      },
+    ],
+    actions: [],
+  };
+}
+
 module.exports = {
   buildRecordApprovalCard,
   buildRecordSearchResultsCard,
@@ -943,4 +1028,5 @@ module.exports = {
   buildRecordCreatedCard,
   buildRecordInvitationSentCard,
   buildRecordAlreadyHasAccessCard,
+  buildRecordProcessingCard,
 };

@@ -1,7 +1,3 @@
-// Disable SSL verification for Zscaler/corporate proxy environments
-// MUST be set BEFORE any modules are loaded (especially @teams/app for JWT validation)
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
 const http = require("http");
 
 const HEALTH_PORT = process.env.HEALTH_PORT || 3979;

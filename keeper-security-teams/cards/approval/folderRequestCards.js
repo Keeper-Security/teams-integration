@@ -3,12 +3,13 @@
  * Cards for folder access requests, search results, and confirmations
  */
 
-const { FOLDER_PERMISSIONS, DURATION_OPTIONS } = require('../constants');
+const { FOLDER_PERMISSIONS, DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
 const { 
   buildSearchCardHeader, 
   buildNoResultsSection, 
   buildFoundItemsHeader,
-  formatFolderPermissionLabel 
+  formatFolderPermissionLabel,
+  getCurrentTimestamp,
 } = require('../cardHelpers');
 const { sanitizeHyperlinks } = require('../../utils/helpers');
 
@@ -28,7 +29,7 @@ function buildFolderApprovalCard({
   isUid = true,
   identifier,
 }) {
-  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const requestedTime = getCurrentTimestamp();
   
   // Sanitize identifier and justification to prevent URL injection
   const safeIdentifier = sanitizeHyperlinks(identifier || folderName);
@@ -37,7 +38,7 @@ function buildFolderApprovalCard({
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Folder Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
@@ -113,7 +114,7 @@ function buildFolderApprovalCard({
       { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: DURATION_OPTIONS },
+      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: DURATION_OPTIONS },
       { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
     );
     
@@ -183,7 +184,7 @@ function buildFolderSearchResultsCard({
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [...headerElements],
     actions: [],
   };
@@ -273,12 +274,12 @@ function buildFolderApprovalCardWithStatus({
     containerStyle = 'attention';
   }
   
-  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = processedTime || getCurrentTimestamp();
   
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Folder Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
@@ -425,7 +426,7 @@ function buildFolderConfirmationCard({
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Folder Selected - Ready to Approve', weight: 'Bolder', size: 'Large', color: 'Good' },
       {
@@ -501,12 +502,12 @@ function buildFolderInvitationSentCard({
   approverName,
   processedTime,
 }) {
-  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = processedTime || getCurrentTimestamp();
   
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { 
         type: 'TextBlock', 
@@ -616,12 +617,12 @@ function buildFolderAlreadyHasAccessCard({
   approverName,
   processedTime,
 }) {
-  const time = processedTime || new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = processedTime || getCurrentTimestamp();
   
   return {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { 
         type: 'TextBlock', 
@@ -705,6 +706,90 @@ function buildFolderAlreadyHasAccessCard({
   };
 }
 
+/**
+ * Build a "Processing" card shown immediately when approval is clicked
+ * This card is returned immediately to avoid Teams timeout, while the actual grant happens in background
+ */
+function buildFolderProcessingCard({
+  approvalId,
+  requesterName,
+  requesterEmail,
+  folderName,
+  justification,
+  permission,
+  duration,
+  approverName,
+  processedTime,
+}) {
+  const time = processedTime || getCurrentTimestamp();
+  
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.5',
+    body: [
+      { type: 'TextBlock', text: 'Folder Access Request', weight: 'Bolder', size: 'ExtraLarge' },
+      {
+        type: 'ColumnSet',
+        columns: [
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Requester:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: requesterName || 'Unknown', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Folder:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: folderName || 'Unknown', color: 'Warning', size: 'Medium' },
+            ],
+          },
+          {
+            type: 'Column',
+            width: 'stretch',
+            items: [
+              { type: 'TextBlock', text: 'Request ID:', weight: 'Bolder', size: 'Medium' },
+              { type: 'TextBlock', text: approvalId || 'N/A', color: 'Warning', size: 'Medium' },
+              { type: 'TextBlock', text: 'Justification:', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+              { type: 'TextBlock', text: justification || 'No justification provided', wrap: true, size: 'Medium' },
+            ],
+          },
+        ],
+      },
+      {
+        type: 'Container',
+        style: 'emphasis',
+        items: [
+          { type: 'TextBlock', text: 'APPROVED - Processing...', weight: 'Bolder', size: 'Large', horizontalAlignment: 'Center', color: 'Good' },
+          { type: 'TextBlock', text: 'Granting access to user. Please wait...', size: 'Small', horizontalAlignment: 'Center', isSubtle: true },
+          { type: 'TextBlock', text: `By: ${approverName || 'Unknown'} at ${time}`, size: 'Small', horizontalAlignment: 'Center', isSubtle: true },
+        ],
+      },
+      {
+        type: 'ColumnSet',
+        spacing: 'Medium',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatFolderPermissionLabel(permission), size: 'Small' }] },
+        ],
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Duration:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: duration || '24h', size: 'Small' }] },
+        ],
+      },
+      {
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Granted To:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: requesterEmail || 'Unknown', size: 'Small' }] },
+        ],
+      },
+    ],
+    actions: [],
+  };
+}
+
 module.exports = {
   buildFolderApprovalCard,
   buildFolderSearchResultsCard,
@@ -712,4 +797,5 @@ module.exports = {
   buildFolderConfirmationCard,
   buildFolderInvitationSentCard,
   buildFolderAlreadyHasAccessCard,
+  buildFolderProcessingCard,
 };

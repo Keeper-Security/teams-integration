@@ -19,59 +19,74 @@ class DevicePoller {
     this.interval = config.deviceApproval?.pollingInterval || 120000;
     this.enabled = config.deviceApproval?.enabled || false;
     this.timer = null;
-    this.processedDevices = new Map(); 
+    this.seenDeviceIds = new Set(); // Track seen device IDs (cleared when no longer pending)
     this.deviceToApprovalId = new Map();
     this.consecutiveErrors = 0;
     this.maxErrors = 3;
   }
 
   /**
-   * Start the polling service
+   * Start the device polling service
    */
   start() {
     if (!this.enabled) {
-      log.info('Disabled in config');
+      log.info('Device poller is disabled in config');
       return;
     }
 
-    log.info(`Starting with interval: ${this.interval}ms`);
+    log.info(`Device poller starting with interval: ${this.interval}ms`);
     
     // Run immediately on start
     this.poll();
     
     // Then run on interval
     this.timer = setInterval(() => this.poll(), this.interval);
-    
-    // Cleanup old entries every hour
-    setInterval(() => this.cleanup(), 3600000);
   }
 
   /**
-   * Stop the polling service
+   * Stop the device polling service
    */
   stop() {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      log.info('Stopped');
+      log.info('Device poller stopped');
     }
   }
 
   /**
    * Poll for pending device approval requests
+   * Uses Slack-style approach: relies on Keeper API as source of truth.
+   * Once a device is approved/denied, it won't appear in pending list.
    */
   async poll() {
-    log.debug('Polling for pending device approvals...');
+    log.info('Polling for pending device approvals...');
     
     try {
       const devices = await keeperClient.getPendingDeviceApprovals();
       
-      if (!devices || devices.length === 0) {
-        log.debug('No pending device approvals');
+      // null/undefined means API failure - keep seen list intact
+      if (devices === null || devices === undefined) {
+        log.debug('Device API failed/timed out, keeping seen list intact');
         return;
       }
       
-      log.debug(`Found ${devices.length} pending devices`);
+      // No pending devices - clear the seen list
+      if (devices.length === 0) {
+        if (this.seenDeviceIds.size > 0) {
+          log.debug('No pending device approvals, clearing seen list');
+          this.seenDeviceIds.clear();
+          this.deviceToApprovalId.clear();
+        }
+        log.info('No pending device approvals found');
+        return;
+      }
+      
+      log.info(`Found ${devices.length} pending device approvals`);
+      
+      // Track current pending IDs and identify new devices
+      const currentIds = new Set();
+      const newDevices = [];
       
       for (const device of devices) {
         const deviceId = device.device_id || device.deviceId || device.id;
@@ -81,16 +96,44 @@ class DevicePoller {
           continue;
         }
         
-        if (this.processedDevices.has(deviceId)) {
-          log.debug('Already processed', deviceId);
-          continue;
-        }
+        currentIds.add(deviceId);
         
-        await this.postApprovalCard(device);
-        this.processedDevices.set(deviceId, Date.now());
+        // Check if this is a NEW device
+        if (!this.seenDeviceIds.has(deviceId)) {
+          newDevices.push(device);
+          this.seenDeviceIds.add(deviceId);
+          const deviceName = device.device_name || device.deviceName || device.name || 'Unknown';
+          log.info('New device approval request detected', { deviceId, deviceName });
+        }
       }
+      
+      // Post only NEW devices to Teams
+      if (newDevices.length > 0) {
+        log.info(`Posting ${newDevices.length} new device approval(s) to Teams`);
+        for (const device of newDevices) {
+          await this.postApprovalCard(device);
+        }
+      }
+      
+      // Cleanup: remove IDs that are no longer pending (processed elsewhere)
+      const removedIds = [...this.seenDeviceIds].filter(id => !currentIds.has(id));
+      if (removedIds.length > 0) {
+        log.debug(`Cleaning up ${removedIds.length} resolved device approval(s)`);
+        for (const id of removedIds) {
+          this.seenDeviceIds.delete(id);
+          this.deviceToApprovalId.delete(id);
+        }
+      }
+      
+      this.consecutiveErrors = 0;
     } catch (error) {
-      log.error('Error polling', error.message);
+      this.consecutiveErrors++;
+      log.error(`Error occurred while device polling (${this.consecutiveErrors}/${this.maxErrors})`, error.message);
+      
+      if (this.consecutiveErrors >= this.maxErrors) {
+        log.warn('Device polling stopped due to consecutive errors (feature may not be available)');
+        this.stop();
+      }
     }
   }
 
@@ -107,7 +150,7 @@ class DevicePoller {
   async postApprovalCard(device) {
     const deviceId = device.device_id || device.deviceId || device.id;
     
-    log.debug('Posting card for device', { deviceId });
+    log.info('Posting device approval card', { deviceId });
     
     // Generate a unique approval ID for this device card
     const approvalId = this.generateApprovalId();
@@ -139,38 +182,18 @@ class DevicePoller {
       );
       
       if (result.success) {
-        log.info('Card posted to approvals channel', { deviceId, approvalId, activityId: result.activityId });
+        log.info('Device approval card posted to channel', { deviceId, approvalId, activityId: result.activityId });
         this.deviceToApprovalId.set(deviceId, approvalId);
         this.consecutiveErrors = 0;
         return true;
       } else {
-        log.warn('Failed to post card to channel', { deviceId });
+        log.warn('Failed to post device approval card to channel', { deviceId });
         this.consecutiveErrors++;
         return false;
       }
     } else {
-      log.warn('Approvals channel not ready - card not sent');
+      log.warn('Approvals channel not ready - device card not sent');
       return false;
-    }
-  }
-
-  /**
-   * Clean up old processed devices (to prevent memory leak)
-   */
-  cleanup(maxAge = 86400000) { // Default: 24 hours
-    const now = Date.now();
-    let cleaned = 0;
-    
-    for (const [id, timestamp] of this.processedDevices) {
-      if (now - timestamp > maxAge) {
-        this.processedDevices.delete(id);
-        this.deviceToApprovalId.delete(id); // Also clean up approval ID mapping
-        cleaned++;
-      }
-    }
-    
-    if (cleaned > 0) {
-      log.debug(`Cleaned up ${cleaned} old entries`);
     }
   }
 }

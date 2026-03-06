@@ -12,7 +12,7 @@ const { ManagedIdentityCredential } = require("@azure/identity");
 
 const { getConfig } = require("./config");
 const handlers = require("./handlers");
-const { PedmPoller, DevicePoller } = require("./background");
+const { EpmPoller, DevicePoller } = require("./background");
 const { initializeChannelService, getChannelService, isApprovalsChannel, createLogger } = require("./services");
 
 const log = createLogger('KeeperBot');
@@ -100,7 +100,7 @@ app.on("message", async (context) => {
     return;
   }
 
-  log.debug(`Received message: "${text}"`);
+  log.info(`Received message: "${text}"`);
 
   // ==================== Capture Conversation References ====================
   
@@ -185,7 +185,6 @@ app.on("message", async (context) => {
   if (text.toLowerCase() === 'help' || text === '?') {
     await handlers.handleHelp(context);
   } else {
-    // Default echo behavior (can be removed in production)
   const state = getConversationState(activity.conversation.id);
   state.count++;
     
@@ -474,7 +473,7 @@ app.on("invoke", async (context) => {
               resultCard = {
                 type: 'AdaptiveCard',
                 '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-                version: '1.4',
+                version: '1.5',
                 body: bodyElements,
                 actions: [
                   {
@@ -517,7 +516,7 @@ app.on("invoke", async (context) => {
               resultCard = {
                 type: 'AdaptiveCard',
                 '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-                version: '1.4',
+                version: '1.5',
                 body: [
                   { type: 'TextBlock', text: 'Error Creating Record', weight: 'Bolder', size: 'Large', color: 'Attention' },
                   { type: 'TextBlock', text: result.error || 'Unknown error occurred', wrap: true },
@@ -554,7 +553,7 @@ app.on("invoke", async (context) => {
           value: {
             type: 'AdaptiveCard',
             '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            version: '1.4',
+            version: '1.5',
             body: [
               { type: 'TextBlock', text: 'Creating Record...', weight: 'Bolder', size: 'Large' },
               { type: 'TextBlock', text: `Title: ${recordTitle.trim()}`, wrap: true },
@@ -644,7 +643,7 @@ app.on("invoke", async (context) => {
             value: {
               type: 'AdaptiveCard',
               '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-              version: '1.4',
+              version: '1.5',
               body: [
                 { type: 'TextBlock', text: 'Approval Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
                 { type: 'TextBlock', text: result.error || 'An error occurred.', wrap: true },
@@ -717,7 +716,7 @@ app.on("invoke", async (context) => {
             value: {
               type: 'AdaptiveCard',
               '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-              version: '1.4',
+              version: '1.5',
               body: [
                 { type: 'TextBlock', text: 'Approval Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
                 { type: 'TextBlock', text: result.error || 'An error occurred.', wrap: true },
@@ -790,7 +789,7 @@ app.on("invoke", async (context) => {
             value: {
               type: 'AdaptiveCard',
               '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-              version: '1.4',
+              version: '1.5',
               body: [
                 { type: 'TextBlock', text: 'Share Creation Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
                 { type: 'TextBlock', text: result.error || 'An error occurred.', wrap: true },
@@ -853,7 +852,7 @@ app.on("invoke", async (context) => {
           const errorCard = {
             type: 'AdaptiveCard',
             '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            version: '1.4',
+            version: '1.5',
             body: [
               { type: 'TextBlock', text: 'Action Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
               { type: 'TextBlock', text: result.error || 'An error occurred while processing the request.', wrap: true },
@@ -980,27 +979,27 @@ app.on("cardAction", async (context) => {
 // ==================== Background Pollers ====================
 
 // Initialize pollers (they will only start if enabled in config)
-let pedmPoller = null;
+let epmPoller = null;
 let devicePoller = null;
 
 const startPollers = () => {
   const currentConfig = getConfig();
   if (currentConfig.pedm.enabled) {
-    pedmPoller = new PedmPoller(app);
-    pedmPoller.start();
-    log.info('EPM poller started');
+    epmPoller = new EpmPoller(app);
+    epmPoller.start();
+    log.info('EPM poller initialized');
   }
 
   if (currentConfig.deviceApproval.enabled) {
     devicePoller = new DevicePoller(app);
     devicePoller.start();
-    log.info('Device approval poller started');
+    log.info('Device poller initialized');
   }
 };
 
 // Stop pollers on shutdown
 const stopPollers = () => {
-  if (pedmPoller) pedmPoller.stop();
+  if (epmPoller) epmPoller.stop();
   if (devicePoller) devicePoller.stop();
 };
 
@@ -1028,7 +1027,7 @@ app.start = async (...args) => {
   
   const keeperClient = require('./services/keeperClient');
   const currentConfig = getConfig();
-  const serviceUrl = currentConfig.keeper?.serviceUrl || 'http://localhost:3001/api/v2/';
+  const serviceUrl = currentConfig.keeper?.serviceUrl || 'http://localhost:8900/api/v2/';
   
   try {
     const isHealthy = await keeperClient.healthCheck();

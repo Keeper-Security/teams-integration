@@ -16,6 +16,7 @@ const {
   tryUpdateApprovalCard,
   buildInvitationNotificationCard,
   buildPermissionConflictCard,
+  getCurrentTimestamp,
 } = require('./helpers');
 
 const log = createLogger('RecordHandler');
@@ -24,7 +25,7 @@ const log = createLogger('RecordHandler');
  * Handle approval of a record access request
  */
 async function handleRecordApproval(context, data) {
-  log.debug('handleRecordApproval called', data);
+  log.info('Processing record approval request', { approvalId: data.approvalId, recordUid: data.recordUid });
   
   const approver = getApproverInfo(context.activity);
   const permission = data.permission || 'view_only';
@@ -57,7 +58,7 @@ async function handleRecordApproval(context, data) {
   
   if (result.success) {
     const expiresAtFormatted = formatExpiryDate(result.expiresAt);
-    const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const processedTime = getCurrentTimestamp();
     
     let updatedCard;
     
@@ -152,7 +153,7 @@ async function handleRecordApproval(context, data) {
     if (result.alreadyHasAccess) {
       log.info('User already has access to record', { recordUid, requesterEmail, currentPermission: result.currentPermission });
       
-      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const processedTime = getCurrentTimestamp();
       const alreadyHasAccessCard = cards.buildRecordAlreadyHasAccessCard({
         approvalId: approvalId,
         requesterName: requesterName,
@@ -215,7 +216,7 @@ async function handleRecordApproval(context, data) {
           const ownerErrorCard = {
             type: 'AdaptiveCard',
             '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            version: '1.4',
+            version: '1.5',
             body: [
               { type: 'TextBlock', text: 'Access Grant Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
               { type: 'TextBlock', text: `The selected user is the current **owner** of this record and already has full permissions.`, wrap: true, spacing: 'Medium' },
@@ -238,7 +239,7 @@ async function handleRecordApproval(context, data) {
         log.error('Error sending owner notification to approver', notifyError.message);
       }
       
-      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const processedTime = getCurrentTimestamp();
       const ownerStatusCard = cards.buildRecordApprovalCardWithStatus({
         approvalId: approvalId,
         requesterName: requesterName,
@@ -270,7 +271,7 @@ async function handleRecordApproval(context, data) {
  * Handle denial of a record access request
  */
 async function handleRecordDenial(context, data) {
-  log.debug('handleRecordDenial called', data);
+  log.info('Processing record denial request', { approvalId: data.approvalId, recordTitle: data.recordTitle });
   
   const approver = getApproverInfo(context.activity);
   const recordTitle = data.recordTitle || data.recordUid || 'Unknown Record';
@@ -278,7 +279,7 @@ async function handleRecordDenial(context, data) {
   const approvalId = data.approvalId || 'N/A';
   const justification = data.justification || '';
   
-  log.debug('Denying record access', { approver: approver.name, recordTitle, requesterName });
+  log.info('Denying record access', { approver: approver.name, recordTitle, requesterName });
   
   const updatedCard = cards.buildRecordApprovalCardWithStatus({
     approvalId,
@@ -334,7 +335,7 @@ async function handleRecordDenial(context, data) {
     }
   }
   
-  log.debug('Denial complete');
+  log.info('Record denial complete', { approvalId });
 }
 
 module.exports = {

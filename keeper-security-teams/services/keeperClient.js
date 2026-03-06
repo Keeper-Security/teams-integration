@@ -49,7 +49,7 @@ class KeeperClient {
   constructor() {
     // Get current config (with KSM data if initialized)
     const config = getConfig();
-    this.baseUrl = (config.keeper?.serviceUrl || 'http://localhost:3001/api/v2/').replace(/\/$/, '');
+    this.baseUrl = (config.keeper?.serviceUrl || 'http://localhost:8900/api/v2/').replace(/\/$/, '');
     this.apiKey = config.keeper?.apiKey;
     
     this.client = axios.create({
@@ -398,6 +398,7 @@ class KeeperClient {
   async grantRecordAccess(recordUid, userEmail, permission, durationSeconds = 86400) {
     try {
       // Check if the user is the record owner (cannot modify owner's permissions)
+      // This is the only pre-check needed - aligns with Slack app implementation
       const recordOwner = await this.getRecordOwner(recordUid);
       if (recordOwner && userEmail.toLowerCase() === recordOwner.toLowerCase()) {
         log.info('Cannot grant access to record owner', { recordUid, userEmail });
@@ -406,38 +407,6 @@ class KeeperClient {
           error: `Cannot modify permissions for record owner (${userEmail}). The user already owns this record and has full access to it.`,
           isOwnerError: true,
         };
-      }
-      
-      // Check if user already has equal or higher permission (skip for change_owner)
-      if (permission !== 'change_owner') {
-        const currentPermission = await this.getRecordUserPermission(recordUid, userEmail);
-        if (currentPermission) {
-          if (currentPermission.isOwner) {
-            log.info('User is already the owner of this record', { recordUid, userEmail });
-            return {
-              success: false,
-              alreadyHasAccess: true,
-              currentPermission: 'owner',
-              currentPermissionLabel: this._getRecordPermissionLabel('owner'),
-              error: `User (${userEmail}) is already the owner of this record with full access.`,
-            };
-          }
-          
-          if (this._hasEqualOrHigherRecordPermission(currentPermission.permission, permission)) {
-            log.info('User already has equal or higher permission on record', { 
-              recordUid, userEmail, 
-              currentPermission: currentPermission.permission, 
-              requestedPermission: permission 
-            });
-            return {
-              success: false,
-              alreadyHasAccess: true,
-              currentPermission: currentPermission.permission,
-              currentPermissionLabel: this._getRecordPermissionLabel(currentPermission.permission),
-              error: `User (${userEmail}) already has "${this._getRecordPermissionLabel(currentPermission.permission)}" access to this record.`,
-            };
-          }
-        }
       }
       
       if (permission === 'change_owner') {
@@ -558,46 +527,8 @@ class KeeperClient {
 
   async grantFolderAccess(folderUid, userEmail, permission, durationSeconds = 86400) {
     try {
-      // Check if user already has permission on this folder
-      const currentPermission = await this.getFolderUserPermission(folderUid, userEmail);
-      if (currentPermission) {
-        // Check if user has manage_all - cannot be downgraded
-        if (currentPermission.manageUsers && currentPermission.manageRecords) {
-          if (permission !== 'manage_all') {
-            log.info('Cannot downgrade folder permission from manage_all', { folderUid, userEmail, requestedPermission: permission });
-            return {
-              success: false,
-              error: `Cannot modify permissions for user (${userEmail}). The user already has "Manage Users and Records" permission on this folder and cannot be downgraded.`,
-              isFullAccessError: true,
-            };
-          }
-          // User already has manage_all and requesting manage_all - already has access
-          log.info('User already has manage_all permission on folder', { folderUid, userEmail });
-          return {
-            success: false,
-            alreadyHasAccess: true,
-            currentPermission: currentPermission.permission,
-            currentPermissionLabel: this._getFolderPermissionLabel(currentPermission.permission),
-            error: `User (${userEmail}) already has "${this._getFolderPermissionLabel(currentPermission.permission)}" access to this folder.`,
-          };
-        }
-        
-        // Check if user already has equal or higher permission
-        if (this._hasEqualOrHigherFolderPermission(currentPermission.permission, permission)) {
-          log.info('User already has equal or higher permission on folder', { 
-            folderUid, userEmail, 
-            currentPermission: currentPermission.permission, 
-            requestedPermission: permission 
-          });
-          return {
-            success: false,
-            alreadyHasAccess: true,
-            currentPermission: currentPermission.permission,
-            currentPermissionLabel: this._getFolderPermissionLabel(currentPermission.permission),
-            error: `User (${userEmail}) already has "${this._getFolderPermissionLabel(currentPermission.permission)}" access to this folder.`,
-          };
-        }
-      }
+      // No permission pre-check needed - aligns with Slack app implementation
+      // The grant command with revoke+retry pattern handles permission conflicts gracefully
       
       const permissionFlags = [];
       
@@ -937,7 +868,7 @@ class KeeperClient {
       
       const result = await this._executeCommandAsync(command, 30);
       
-      log.info('approvePedmRequest result:', JSON.stringify(result));
+      log.debug('approvePedmRequest result', { status: result?.status });
       
       if (result?.status === 'success') {
         // Success! Request was approved
@@ -976,7 +907,7 @@ class KeeperClient {
       
       const result = await this._executeCommandAsync(command, 30);
       
-      log.info('denyPedmRequest result:', JSON.stringify(result));
+      log.debug('denyPedmRequest result', { status: result?.status });
       
       if (result?.status === 'success') {
         // Success! Request was denied
@@ -1074,7 +1005,7 @@ class KeeperClient {
       const command = 'device-approve --approve ' + deviceId;
       const result = await this._executeCommandAsync(command, 30);
       
-      log.info('approveDevice result:', JSON.stringify(result));
+      log.debug('approveDevice result', { status: result?.status });
       
       if (result?.status === 'success') {
         // Also check message and data for "no pending" indicators
@@ -1150,7 +1081,7 @@ class KeeperClient {
       const command = 'device-approve --deny ' + deviceId;
       const result = await this._executeCommandAsync(command, 30);
       
-      log.info('denyDevice result:', JSON.stringify(result));
+      log.debug('denyDevice result', { status: result?.status });
       
       if (result?.status === 'success') {
         // Success! Device was denied
@@ -1204,7 +1135,7 @@ class KeeperClient {
 
   async _executeCommandAsync(command, maxWait = 30) {
     try {
-      log.debug('Executing command', command);
+      log.debug('Executing command', command.replace(/password=[^\s]+/, 'password=***'));
       
       const response = await this.client.post('/executecommand-async', { command });
       

@@ -3,8 +3,8 @@
  * Cards for one-time share requests, search results, and status
  */
 
-const { SHARE_DURATION_OPTIONS } = require('../constants');
-const { buildSearchCardHeader, buildNoResultsSection } = require('../cardHelpers');
+const { SHARE_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { buildSearchCardHeader, buildNoResultsSection, getCurrentTimestamp } = require('../cardHelpers');
 const { sanitizeHyperlinks } = require('../../utils/helpers');
 
 /**
@@ -29,7 +29,7 @@ function buildShareSearchResultsCard({
   const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [...headerElements],
     actions: [],
   };
@@ -69,7 +69,7 @@ function buildShareSearchResultsCard({
           { type: 'TextBlock', text: `UID: ${record.uid}`, size: 'Small', isSubtle: true },
         ]},
         { type: 'TextBlock', text: 'Share Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: SHARE_DURATION_OPTIONS },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: SHARE_DURATION_OPTIONS },
         { type: 'Input.Toggle', id: 'editable', title: 'Allow editing (recipient can modify the record)', value: 'false' }
       );
       
@@ -89,7 +89,7 @@ function buildShareSearchResultsCard({
         { type: 'TextBlock', text: 'Select Record', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'selectedRecord', value: recordChoices[0].value, choices: recordChoices, style: 'expanded' },
         { type: 'TextBlock', text: 'Share Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: SHARE_DURATION_OPTIONS },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: SHARE_DURATION_OPTIONS },
         { type: 'Input.Toggle', id: 'editable', title: 'Allow editing (recipient can modify the record)', value: 'false' }
       );
       
@@ -119,7 +119,7 @@ function buildOneTimeShareApprovalCard({
   isUid = true,
   identifier,
 }) {
-  const requestedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const requestedTime = getCurrentTimestamp();
   
   // Sanitize identifier and justification to prevent URL injection
   const safeIdentifier = sanitizeHyperlinks(identifier || recordTitle);
@@ -199,7 +199,7 @@ function buildOneTimeShareApprovalCard({
     // Duration and editable options
     card.body.push(
       { type: 'TextBlock', text: 'Share Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: '24h', choices: SHARE_DURATION_OPTIONS },
+      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: SHARE_DURATION_OPTIONS },
       { type: 'Input.Toggle', id: 'editable', title: 'Allow editing (recipient can modify the record)', value: 'false' }
     );
     
@@ -262,12 +262,11 @@ function buildOneTimeShareApprovalCardWithStatus({
   approverName,
   duration,
   expiresAt,
-  shareUrl,
   editable,
 }) {
   const statusText = status === 'approved' ? 'APPROVED' : 'DENIED';
   const statusColor = status === 'approved' ? 'Good' : 'Attention';
-  const time = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const time = getCurrentTimestamp();
   
   const card = {
     type: 'AdaptiveCard',

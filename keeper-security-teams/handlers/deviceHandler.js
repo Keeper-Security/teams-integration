@@ -14,6 +14,7 @@
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
 const { createLogger, getChannelService } = require('../services');
+const { getCurrentTimestamp } = require('./approval/helpers');
 
 const log = createLogger('DeviceHandler');
 
@@ -88,12 +89,12 @@ function getApproverInfo(activity) {
  * Build an "already processed" card when the device request was handled elsewhere
  */
 function buildAlreadyProcessedCard(username, deviceId, checkedBy) {
-  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const timestamp = getCurrentTimestamp();
   
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       {
         type: 'Container',
@@ -142,7 +143,7 @@ async function handleDeviceApproval(context, data) {
     return {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [{
         type: 'TextBlock',
         text: 'Error: Missing device ID',
@@ -175,7 +176,7 @@ async function handleDeviceApproval(context, data) {
     updatedCard = {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [
         {
           type: 'TextBlock',
@@ -215,7 +216,7 @@ async function handleDeviceDenial(context, data) {
     return {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [{
         type: 'TextBlock',
         text: 'Error: Missing device ID',
@@ -248,7 +249,7 @@ async function handleDeviceDenial(context, data) {
     updatedCard = {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [
         {
           type: 'TextBlock',

@@ -16,6 +16,7 @@ const {
   tryUpdateApprovalCard,
   buildInvitationNotificationCard,
   buildPermissionConflictCard,
+  getCurrentTimestamp,
 } = require('./helpers');
 
 const log = createLogger('FolderHandler');
@@ -24,7 +25,7 @@ const log = createLogger('FolderHandler');
  * Handle approval of a folder access request
  */
 async function handleFolderApproval(context, data) {
-  log.debug('handleFolderApproval called', data);
+  log.info('Processing folder approval request', { approvalId: data.approvalId, folderUid: data.folderUid });
   
   const approver = getApproverInfo(context.activity);
   const permission = data.permission || 'no_permissions';
@@ -57,7 +58,7 @@ async function handleFolderApproval(context, data) {
   
   if (result.success) {
     const expiresAtFormatted = formatExpiryDate(result.expiresAt);
-    const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const processedTime = getCurrentTimestamp();
     
     let updatedCard;
     
@@ -152,7 +153,7 @@ async function handleFolderApproval(context, data) {
     if (result.alreadyHasAccess) {
       log.info('User already has access to folder', { folderUid, requesterEmail, currentPermission: result.currentPermission });
       
-      const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const processedTime = getCurrentTimestamp();
       const alreadyHasAccessCard = cards.buildFolderAlreadyHasAccessCard({
         approvalId: approvalId,
         requesterName: requesterName,
@@ -188,7 +189,7 @@ async function handleFolderApproval(context, data) {
           const fullAccessErrorCard = {
             type: 'AdaptiveCard',
             '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            version: '1.4',
+            version: '1.5',
             body: [
               { type: 'TextBlock', text: 'Permission Change Not Allowed', weight: 'Bolder', size: 'Large', color: 'Attention' },
               { type: 'TextBlock', text: `The selected user already has **Manage Users and Records** permission on this folder and cannot be downgraded.`, wrap: true, spacing: 'Medium' },
@@ -271,7 +272,7 @@ async function handleFolderApproval(context, data) {
  * Handle denial of a folder access request
  */
 async function handleFolderDenial(context, data) {
-  log.debug('handleFolderDenial called', data);
+  log.info('Processing folder denial request', { approvalId: data.approvalId, folderName: data.folderName });
   
   const approver = getApproverInfo(context.activity);
   const folderName = data.folderName || data.folderUid || 'Unknown Folder';
@@ -279,7 +280,7 @@ async function handleFolderDenial(context, data) {
   const approvalId = data.approvalId || 'N/A';
   const justification = data.justification || '';
   
-  log.debug('Denying folder access', { approver: approver.name, folderName, requesterName });
+  log.info('Denying folder access', { approver: approver.name, folderName, requesterName });
   
   const updatedCard = cards.buildFolderApprovalCardWithStatus({
     approvalId,
@@ -336,7 +337,7 @@ async function handleFolderDenial(context, data) {
     }
   }
   
-  log.debug('Folder denial complete');
+  log.info('Folder denial complete', { approvalId });
 }
 
 module.exports = {

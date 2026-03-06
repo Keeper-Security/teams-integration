@@ -91,7 +91,7 @@ function buildAlreadyProcessedCard(username, approvalUid) {
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       {
         type: 'Container',
@@ -139,7 +139,7 @@ async function handlePedmApproval(context, data) {
     return {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [{
         type: 'TextBlock',
         text: 'Error: Missing approval UID',
@@ -171,7 +171,7 @@ async function handlePedmApproval(context, data) {
     updatedCard = {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [
         {
           type: 'TextBlock',
@@ -212,7 +212,7 @@ async function handlePedmDenial(context, data) {
     return {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [{
         type: 'TextBlock',
         text: 'Error: Missing approval UID',
@@ -244,7 +244,7 @@ async function handlePedmDenial(context, data) {
     updatedCard = {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [
         {
           type: 'TextBlock',

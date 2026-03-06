@@ -14,7 +14,7 @@
         "outline": "outline.png"
     },
     "name": {
-        "short": "Keeper Security${{APP_NAME_SUFFIX}}",
+        "short": "Keeper Security",
         "full": "Keeper Security - Credential Management Bot"
     },
     "description": {
@@ -35,24 +35,24 @@
             "commandLists": [
                 {
                   "scopes": ["personal", "team", "groupChat"],
-                  "commands": [
-                      {
-                          "title": "keeper-request-record",
-                          "description": "Request access to a record. Usage: keeper-request-record <record-name> <justification>"
-                      },
-                      {
-                          "title": "keeper-request-folder",
-                          "description": "Request access to a folder. Usage: keeper-request-folder <folder-name> <justification>"
-                      },
-                      {
-                          "title": "keeper-one-time-share",
-                          "description": "Request a one-time share link. Usage: keeper-one-time-share <record-name> [justification]"
-                      },
-                      {
-                          "title": "help",
-                          "description": "Show available commands and usage."
-                      }
-                  ]
+                "commands": [
+                    {
+                        "title": "keeper-request-record",
+                          "description": "Request access to a record. Usage: keeper-request-record \"Record UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "keeper-request-folder",
+                          "description": "Request access to a folder. Usage: keeper-request-folder \"Folder UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "keeper-one-time-share",
+                          "description": "Request a one-time share link. Usage: keeper-one-time-share \"Record UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "help",
+                        "description": "Show available commands and usage."
+                    }
+                ]
                 }
             ]
         }

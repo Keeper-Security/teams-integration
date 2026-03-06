@@ -16,6 +16,7 @@ const {
   getApproverInfo, 
   tryUpdateApprovalCard,
   buildInvitationNotificationCard,
+  getCurrentTimestamp,
 } = require('./helpers');
 const { handleRecordApproval, handleRecordDenial } = require('./recordHandler');
 const { handleFolderApproval, handleFolderDenial } = require('./folderHandler');
@@ -82,7 +83,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
       const alreadyProcessedCard = {
         type: 'AdaptiveCard',
         '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-        version: '1.2',
+        version: '1.5',
         body: [
           {
             type: 'TextBlock',
@@ -146,9 +147,9 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
   const permission = data.permission || 'view_only';
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration);
-  const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const processedTime = getCurrentTimestamp();
   
-  log.debug('Approving record via Universal Action', { approver: approver.name, recordTitle, requesterName, permission, duration });
+  log.info('Approving record via Universal Action', { approvalId, approver: approver.name, recordTitle, permission, duration });
   
   if (!recordUid) {
     log.error('Missing record UID');
@@ -160,170 +161,235 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     return { error: 'Missing requester email' };
   }
   
-  const result = await keeperClient.grantRecordAccess(
-    recordUid,
-    requesterEmail,
-    permission,
-    durationSeconds
-  );
-  
-  if (!result.success) {
-    if (result.alreadyHasAccess) {
-      log.info('User already has access to record', { recordUid, requesterEmail, currentPermission: result.currentPermission });
-      
-      const alreadyHasAccessCard = cards.buildRecordAlreadyHasAccessCard({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        recordTitle,
-        recordUid,
-        justification: data.justification || '',
-        currentPermission: result.currentPermission,
-        currentPermissionLabel: result.currentPermissionLabel,
-        approverName: approver.name,
-        processedTime,
-      });
-      
-      // Non-blocking update to avoid Teams timeout
-      tryUpdateApprovalCard(approvalId, alreadyHasAccessCard, context)
-        .then(() => log.debug('Updated channel card with already has access status'))
-        .catch(err => log.debug('Could not update channel card', err.message));
-      
-      return { updatedCard: alreadyHasAccessCard };
-    }
-    
-    if (result.isOwnerError || isRecordOwnerError(result.error)) {
-      log.info('Record owner error detected in Universal Action', { recordUid, requesterEmail });
-      
-      const ownerStatusCard = cards.buildRecordApprovalCardWithStatus({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        recordTitle,
-        justification: data.justification || '',
-        status: 'owner',
-        statusMessage: 'User Already Has Full Access (Owner)',
-        approverName: approver.name,
-        permission,
-        processedTime,
-      });
-      
-      // Non-blocking update to avoid Teams timeout
-      tryUpdateApprovalCard(approvalId, ownerStatusCard, context)
-        .then(() => log.debug('Updated channel card with owner status'))
-        .catch(err => log.debug('Could not update channel card', err.message));
-      
-      return { updatedCard: ownerStatusCard };
-    }
-    
-    if (isPermissionConflictError(result.error)) {
-      log.info('Permission conflict detected in Universal Action', { recordUid, requesterEmail, error: result.error });
-      return { error: result.error, keepCardActive: true };
-    }
-    
-    log.error('Failed to grant access', result.error);
-    return { error: result.error };
-  }
-  
-  const expiresAtFormatted = formatExpiryDate(result.expiresAt);
-  const isInvitationSent = result.invitationSent;
-  
-  storeApprovalStatus(approvalId, {
-    status: isInvitationSent ? 'invitation_sent' : 'approved',
-    type: 'record',
-    approverName: approver.name,
+  // Build and return the "Processing" card immediately to avoid Teams timeout
+  const processingCard = cards.buildRecordProcessingCard({
+    approvalId,
     requesterName,
     requesterEmail,
     recordTitle,
     justification: data.justification || '',
     permission,
     duration: getDisplayDuration(permission, duration, 'record'),
-    expiresAt: expiresAtFormatted,
+    approverName: approver.name,
     processedTime,
-    invitationSent: isInvitationSent,
   });
   
-  let updatedCard;
+  // Fire off the grant operation asynchronously - don't await
+  processRecordGrantAsync(context, data, approver, {
+    approvalId,
+    recordUid,
+    recordTitle,
+    requesterName,
+    requesterId,
+    requesterEmail,
+    permission,
+    duration,
+    durationSeconds,
+    processedTime,
+  });
   
-  if (isInvitationSent) {
-    log.info('Share invitation sent for record (user has no Keeper account)');
-    updatedCard = cards.buildRecordInvitationSentCard({
-      approvalId,
-      requesterName,
-      requesterEmail,
-      recordTitle,
+  // Return the processing card immediately
+  return { updatedCard: processingCard };
+}
+
+/**
+ * Process the record grant asynchronously after returning the processing card
+ */
+async function processRecordGrantAsync(context, data, approver, params) {
+  const {
+    approvalId,
+    recordUid,
+    recordTitle,
+    requesterName,
+    requesterId,
+    requesterEmail,
+    permission,
+    duration,
+    durationSeconds,
+    processedTime,
+  } = params;
+  
+  try {
+    const result = await keeperClient.grantRecordAccess(
       recordUid,
-      justification: data.justification || '',
-      permission: permission,
-      approverName: approver.name,
-      processedTime,
-    });
-  } else {
-    updatedCard = cards.buildRecordApprovalCardWithStatus({
-      approvalId,
-      requesterName,
       requesterEmail,
-      recordTitle,
-      justification: data.justification || '',
-      status: 'approved',
-      approverName: approver.name,
-      permission: permission,
-      duration: getDisplayDuration(permission, duration, 'record'),
-      expiresAt: expiresAtFormatted,
-      processedTime,
-    });
-  }
-  
-  if (requesterId) {
-    try {
-      const channelService = getChannelService();
-      if (channelService) {
-        let notificationCard;
+      permission,
+      durationSeconds
+    );
+    
+    let finalCard;
+    
+    if (!result.success) {
+      if (result.alreadyHasAccess) {
+        log.info('User already has access to record', { recordUid, requesterEmail, currentPermission: result.currentPermission });
         
-        if (isInvitationSent) {
-          notificationCard = buildInvitationNotificationCard({
-            recordTitle: recordTitle,
-            itemType: 'record',
-            permission: permission,
-            approverName: approver.name,
-          });
-        } else {
-          notificationCard = cards.buildRequesterNotificationCard({
-            approved: true,
-            recordTitle: recordTitle,
-            permission: permission,
-            duration: getDisplayDuration(permission, duration, 'record'),
-            expiresAt: expiresAtFormatted,
-            approverName: approver.name,
-            itemType: 'record',
-          });
-        }
+        finalCard = cards.buildRecordAlreadyHasAccessCard({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          recordUid,
+          justification: data.justification || '',
+          currentPermission: result.currentPermission,
+          currentPermissionLabel: result.currentPermissionLabel,
+          approverName: approver.name,
+          processedTime,
+        });
+      } else if (result.isOwnerError || isRecordOwnerError(result.error)) {
+        log.info('Record owner error detected', { recordUid, requesterEmail });
         
-        channelService.sendDirectMessage(requesterId, {
-          type: 'message',
-          attachments: [{
-            contentType: 'application/vnd.microsoft.card.adaptive',
-            content: notificationCard,
-          }],
-        }).then(sent => {
-          if (sent) {
-            log.debug(`Sent ${isInvitationSent ? 'invitation' : 'approval'} notification to requester`);
-          }
-        }).catch(err => {
-          log.debug(`Could not send notification`, err.message);
+        finalCard = cards.buildRecordApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          justification: data.justification || '',
+          status: 'owner',
+          statusMessage: 'User Already Has Full Access (Owner)',
+          approverName: approver.name,
+          permission,
+          processedTime,
+        });
+      } else {
+        log.error('Failed to grant record access', { error: result.error });
+        
+        // Build an error card
+        finalCard = cards.buildRecordApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          justification: data.justification || '',
+          status: 'denied',
+          statusMessage: `Failed: ${result.error || 'Unknown error'}`,
+          approverName: approver.name,
+          permission,
+          processedTime,
         });
       }
-    } catch (notifyError) {
-      log.error('Error sending notification', notifyError.message);
+    } else {
+      // Success!
+      const expiresAtFormatted = formatExpiryDate(result.expiresAt);
+      const isInvitationSent = result.invitationSent;
+      
+      storeApprovalStatus(approvalId, {
+        status: isInvitationSent ? 'invitation_sent' : 'approved',
+        type: 'record',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        permission,
+        duration: getDisplayDuration(permission, duration, 'record'),
+        expiresAt: expiresAtFormatted,
+        processedTime,
+        invitationSent: isInvitationSent,
+      });
+      
+      if (isInvitationSent) {
+        log.info('Share invitation sent for record (user has no Keeper account)');
+        finalCard = cards.buildRecordInvitationSentCard({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          recordUid,
+          justification: data.justification || '',
+          permission: permission,
+          approverName: approver.name,
+          processedTime,
+        });
+      } else {
+        finalCard = cards.buildRecordApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          recordTitle,
+          justification: data.justification || '',
+          status: 'approved',
+          approverName: approver.name,
+          permission: permission,
+          duration: getDisplayDuration(permission, duration, 'record'),
+          expiresAt: expiresAtFormatted,
+          processedTime,
+        });
+      }
+      
+      // Send notification to requester
+      if (requesterId) {
+        try {
+          const channelService = getChannelService();
+          if (channelService) {
+            let notificationCard;
+            
+            if (isInvitationSent) {
+              notificationCard = buildInvitationNotificationCard({
+                recordTitle: recordTitle,
+                itemType: 'record',
+                permission: permission,
+                approverName: approver.name,
+              });
+            } else {
+              notificationCard = cards.buildRequesterNotificationCard({
+                approved: true,
+                recordTitle: recordTitle,
+                permission: permission,
+                duration: getDisplayDuration(permission, duration, 'record'),
+                expiresAt: expiresAtFormatted,
+                approverName: approver.name,
+                itemType: 'record',
+              });
+            }
+            
+            channelService.sendDirectMessage(requesterId, {
+              type: 'message',
+              attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: notificationCard,
+              }],
+            }).catch(err => {
+              log.debug('Could not send notification to requester', err.message);
+            });
+          }
+        } catch (notifyError) {
+          log.error('Error sending notification', notifyError.message);
+        }
+      }
+    }
+    
+    // Update the card with the final status
+    if (finalCard) {
+      try {
+        await tryUpdateApprovalCard(approvalId, finalCard, context);
+        log.info('Updated record approval card with final status', { approvalId });
+      } catch (updateErr) {
+        log.error('Failed to update record approval card', { approvalId, error: updateErr.message });
+      }
+    }
+  } catch (error) {
+    log.error('Error in async record grant processing', { approvalId, error: error.message });
+    
+    // Try to update the card with an error status
+    try {
+      const errorCard = cards.buildRecordApprovalCardWithStatus({
+        approvalId,
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        justification: data.justification || '',
+        status: 'denied',
+        statusMessage: `Error: ${error.message}`,
+        approverName: approver.name,
+        permission,
+        processedTime,
+      });
+      
+      await tryUpdateApprovalCard(approvalId, errorCard, context);
+    } catch (updateErr) {
+      log.error('Failed to update card with error status', { approvalId, error: updateErr.message });
     }
   }
-  
-  // Non-blocking update to avoid Teams timeout
-  tryUpdateApprovalCard(approvalId, updatedCard, context)
-    .then(() => log.debug('Updated channel card with approved status'))
-    .catch(err => log.debug('Could not update channel card', err.message));
-  
-  return { updatedCard };
 }
 
 async function handleFolderApprovalWithCardResponse(context, data, approver) {
@@ -331,9 +397,9 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
   const permission = data.permission || 'no_permissions';
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration);
-  const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const processedTime = getCurrentTimestamp();
   
-  log.debug('Approving folder via Universal Action', { approver: approver.name, folderName, requesterName, permission, duration });
+  log.info('Approving folder via Universal Action', { approvalId, approver: approver.name, folderName, permission, duration });
   
   if (!folderUid) {
     log.error('Missing folder UID');
@@ -345,201 +411,257 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     return { error: 'Missing requester email' };
   }
   
-  const result = await keeperClient.grantFolderAccess(
-    folderUid,
-    requesterEmail,
-    permission,
-    durationSeconds
-  );
-  
-  if (!result.success) {
-    if (result.alreadyHasAccess) {
-      log.info('User already has access to folder', { folderUid, requesterEmail, currentPermission: result.currentPermission });
-      
-      const alreadyHasAccessCard = cards.buildFolderAlreadyHasAccessCard({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        folderName,
-        folderUid,
-        justification: data.justification || '',
-        currentPermission: result.currentPermission,
-        currentPermissionLabel: result.currentPermissionLabel,
-        approverName: approver.name,
-        processedTime,
-      });
-      
-      // Non-blocking update to avoid Teams timeout
-      tryUpdateApprovalCard(approvalId, alreadyHasAccessCard, context)
-        .then(() => log.debug('Updated channel card with already has access status'))
-        .catch(err => log.debug('Could not update channel card', err.message));
-      
-      return { updatedCard: alreadyHasAccessCard };
-    }
-    
-    if (result.isFullAccessError) {
-      log.info('Folder full access error detected in Universal Action', { folderUid, requesterEmail });
-      
-      const fullAccessCard = cards.buildFolderApprovalCardWithStatus({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        folderName,
-        justification: data.justification || '',
-        status: 'owner',
-        statusMessage: 'User Already Has Full Access (Cannot Downgrade)',
-        approverName: approver.name,
-        permission,
-        processedTime,
-      });
-      
-      // Non-blocking update to avoid Teams timeout
-      tryUpdateApprovalCard(approvalId, fullAccessCard, context)
-        .then(() => log.debug('Updated channel card with full access status'))
-        .catch(err => log.debug('Could not update channel card', err.message));
-      
-      return { updatedCard: fullAccessCard };
-    }
-    
-    if (isPermissionConflictError(result.error)) {
-      log.info('Permission conflict detected for folder in Universal Action', { folderUid, requesterEmail, error: result.error });
-      return { error: result.error, keepCardActive: true };
-    }
-    
-    if (isRecordOwnerError(result.error)) {
-      log.info('Folder owner error detected in Universal Action', { folderUid, requesterEmail });
-      
-      const ownerStatusCard = cards.buildFolderApprovalCardWithStatus({
-        approvalId,
-        requesterName,
-        requesterEmail,
-        folderName,
-        justification: data.justification || '',
-        status: 'owner',
-        statusMessage: 'User Already Has Full Access',
-        approverName: approver.name,
-        permission,
-        processedTime,
-      });
-      
-      // Non-blocking update to avoid Teams timeout
-      tryUpdateApprovalCard(approvalId, ownerStatusCard, context)
-        .then(() => log.debug('Updated channel card with owner status'))
-        .catch(err => log.debug('Could not update channel card', err.message));
-      
-      return { updatedCard: ownerStatusCard };
-    }
-    
-    log.error('Failed to grant folder access', result.error);
-    return { error: result.error };
-  }
-  
-  const expiresAtFormatted = formatExpiryDate(result.expiresAt);
-  const isInvitationSent = result.invitationSent;
-  
-  storeApprovalStatus(approvalId, {
-    status: isInvitationSent ? 'invitation_sent' : 'approved',
-    type: 'folder',
-    approverName: approver.name,
+  // Build and return the "Processing" card immediately to avoid Teams timeout
+  const processingCard = cards.buildFolderProcessingCard({
+    approvalId,
     requesterName,
     requesterEmail,
     folderName,
     justification: data.justification || '',
     permission,
     duration: getDisplayDuration(permission, duration, 'folder'),
-    expiresAt: expiresAtFormatted,
+    approverName: approver.name,
     processedTime,
-    invitationSent: isInvitationSent,
   });
   
-  let updatedCard;
+  // Fire off the grant operation asynchronously - don't await
+  processFolderGrantAsync(context, data, approver, {
+    approvalId,
+    folderUid,
+    folderName,
+    requesterName,
+    requesterId,
+    requesterEmail,
+    permission,
+    duration,
+    durationSeconds,
+    processedTime,
+  });
   
-  if (isInvitationSent) {
-    log.info('Share invitation sent for folder (user has no Keeper account)');
-    updatedCard = cards.buildFolderInvitationSentCard({
-      approvalId,
-      requesterName,
-      requesterEmail,
-      folderName,
+  // Return the processing card immediately
+  return { updatedCard: processingCard };
+}
+
+/**
+ * Process the folder grant asynchronously after returning the processing card
+ */
+async function processFolderGrantAsync(context, data, approver, params) {
+  const {
+    approvalId,
+    folderUid,
+    folderName,
+    requesterName,
+    requesterId,
+    requesterEmail,
+    permission,
+    duration,
+    durationSeconds,
+    processedTime,
+  } = params;
+  
+  try {
+    const result = await keeperClient.grantFolderAccess(
       folderUid,
-      justification: data.justification || '',
-      permission: permission,
-      approverName: approver.name,
-      processedTime,
-    });
-  } else {
-    updatedCard = cards.buildFolderApprovalCardWithStatus({
-      approvalId,
-      requesterName,
       requesterEmail,
-      folderName,
-      justification: data.justification || '',
-      status: 'approved',
-      approverName: approver.name,
-      permission: permission,
-      duration: getDisplayDuration(permission, duration, 'folder'),
-      expiresAt: expiresAtFormatted,
-      processedTime,
-    });
-  }
-  
-  if (requesterId) {
-    try {
-      const channelService = getChannelService();
-      if (channelService) {
-        let notificationCard;
+      permission,
+      durationSeconds
+    );
+    
+    let finalCard;
+    
+    if (!result.success) {
+      if (result.alreadyHasAccess) {
+        log.info('User already has access to folder', { folderUid, requesterEmail, currentPermission: result.currentPermission });
         
-        if (isInvitationSent) {
-          notificationCard = buildInvitationNotificationCard({
-            recordTitle: folderName,
-            itemType: 'folder',
-            permission: permission,
-            approverName: approver.name,
-          });
-        } else {
-          notificationCard = cards.buildRequesterNotificationCard({
-            approved: true,
-            recordTitle: folderName,
-            itemType: 'folder',
-            permission: permission,
-            duration: getDisplayDuration(permission, duration, 'folder'),
-            expiresAt: expiresAtFormatted,
-            approverName: approver.name,
-          });
-        }
+        finalCard = cards.buildFolderAlreadyHasAccessCard({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          folderUid,
+          justification: data.justification || '',
+          currentPermission: result.currentPermission,
+          currentPermissionLabel: result.currentPermissionLabel,
+          approverName: approver.name,
+          processedTime,
+        });
+      } else if (result.isFullAccessError) {
+        log.info('Folder full access error detected', { folderUid, requesterEmail });
         
-        channelService.sendDirectMessage(requesterId, {
-          type: 'message',
-          attachments: [{
-            contentType: 'application/vnd.microsoft.card.adaptive',
-            content: notificationCard,
-          }],
-        }).then(sent => {
-          if (sent) {
-            log.debug(`Sent ${isInvitationSent ? 'invitation' : 'folder approval'} notification to requester`);
-          }
-        }).catch(err => {
-          log.debug(`Could not send notification`, err.message);
+        finalCard = cards.buildFolderApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          justification: data.justification || '',
+          status: 'owner',
+          statusMessage: 'User Already Has Full Access (Cannot Downgrade)',
+          approverName: approver.name,
+          permission,
+          processedTime,
+        });
+      } else if (isRecordOwnerError(result.error)) {
+        log.info('Folder owner error detected', { folderUid, requesterEmail });
+        
+        finalCard = cards.buildFolderApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          justification: data.justification || '',
+          status: 'owner',
+          statusMessage: 'User Already Has Full Access',
+          approverName: approver.name,
+          permission,
+          processedTime,
+        });
+      } else {
+        log.error('Failed to grant folder access', { error: result.error });
+        
+        // Build an error card
+        finalCard = cards.buildFolderApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          justification: data.justification || '',
+          status: 'denied',
+          statusMessage: `Failed: ${result.error || 'Unknown error'}`,
+          approverName: approver.name,
+          permission,
+          processedTime,
         });
       }
-    } catch (notifyError) {
-      log.error('Error sending notification', notifyError.message);
+    } else {
+      // Success!
+      const expiresAtFormatted = formatExpiryDate(result.expiresAt);
+      const isInvitationSent = result.invitationSent;
+      
+      storeApprovalStatus(approvalId, {
+        status: isInvitationSent ? 'invitation_sent' : 'approved',
+        type: 'folder',
+        approverName: approver.name,
+        requesterName,
+        requesterEmail,
+        folderName,
+        justification: data.justification || '',
+        permission,
+        duration: getDisplayDuration(permission, duration, 'folder'),
+        expiresAt: expiresAtFormatted,
+        processedTime,
+        invitationSent: isInvitationSent,
+      });
+      
+      if (isInvitationSent) {
+        log.info('Share invitation sent for folder (user has no Keeper account)');
+        finalCard = cards.buildFolderInvitationSentCard({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          folderUid,
+          justification: data.justification || '',
+          permission: permission,
+          approverName: approver.name,
+          processedTime,
+        });
+      } else {
+        finalCard = cards.buildFolderApprovalCardWithStatus({
+          approvalId,
+          requesterName,
+          requesterEmail,
+          folderName,
+          justification: data.justification || '',
+          status: 'approved',
+          approverName: approver.name,
+          permission: permission,
+          duration: getDisplayDuration(permission, duration, 'folder'),
+          expiresAt: expiresAtFormatted,
+          processedTime,
+        });
+      }
+      
+      // Send notification to requester
+      if (requesterId) {
+        try {
+          const channelService = getChannelService();
+          if (channelService) {
+            let notificationCard;
+            
+            if (isInvitationSent) {
+              notificationCard = buildInvitationNotificationCard({
+                recordTitle: folderName,
+                itemType: 'folder',
+                permission: permission,
+                approverName: approver.name,
+              });
+            } else {
+              notificationCard = cards.buildRequesterNotificationCard({
+                approved: true,
+                recordTitle: folderName,
+                itemType: 'folder',
+                permission: permission,
+                duration: getDisplayDuration(permission, duration, 'folder'),
+                expiresAt: expiresAtFormatted,
+                approverName: approver.name,
+              });
+            }
+            
+            channelService.sendDirectMessage(requesterId, {
+              type: 'message',
+              attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: notificationCard,
+              }],
+            }).catch(err => {
+              log.debug('Could not send notification to requester', err.message);
+            });
+          }
+        } catch (notifyError) {
+          log.error('Error sending notification', notifyError.message);
+        }
+      }
+    }
+    
+    // Update the card with the final status
+    if (finalCard) {
+      try {
+        await tryUpdateApprovalCard(approvalId, finalCard, context);
+        log.info('Updated folder approval card with final status', { approvalId });
+      } catch (updateErr) {
+        log.error('Failed to update folder approval card', { approvalId, error: updateErr.message });
+      }
+    }
+  } catch (error) {
+    log.error('Error in async folder grant processing', { approvalId, error: error.message });
+    
+    // Try to update the card with an error status
+    try {
+      const errorCard = cards.buildFolderApprovalCardWithStatus({
+        approvalId,
+        requesterName,
+        requesterEmail,
+        folderName,
+        justification: data.justification || '',
+        status: 'denied',
+        statusMessage: `Error: ${error.message}`,
+        approverName: approver.name,
+        permission,
+        processedTime,
+      });
+      
+      await tryUpdateApprovalCard(approvalId, errorCard, context);
+    } catch (updateErr) {
+      log.error('Failed to update card with error status', { approvalId, error: updateErr.message });
     }
   }
-  
-  // Non-blocking update to avoid Teams timeout
-  tryUpdateApprovalCard(approvalId, updatedCard, context)
-    .then(() => log.debug('Updated channel card with folder approved status'))
-    .catch(err => log.debug('Could not update channel card', err.message));
-  
-  return { updatedCard };
 }
 
 async function handleRecordDenialWithCardResponse(context, data, approver) {
   const { approvalId, recordTitle, requesterName, requesterId, requesterEmail } = data;
-  const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const processedTime = getCurrentTimestamp();
   
-  log.debug('Denying record via Universal Action', { approver: approver.name, recordTitle, requesterName });
+  log.info('Denying record via Universal Action', { approvalId, approver: approver.name, recordTitle });
   
   storeApprovalStatus(approvalId, {
     status: 'denied',
@@ -603,9 +725,9 @@ async function handleRecordDenialWithCardResponse(context, data, approver) {
 
 async function handleFolderDenialWithCardResponse(context, data, approver) {
   const { approvalId, folderName, requesterName, requesterId, requesterEmail } = data;
-  const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const processedTime = getCurrentTimestamp();
   
-  log.debug('Denying folder via Universal Action', { approver: approver.name, folderName, requesterName });
+  log.info('Denying folder via Universal Action', { approvalId, approver: approver.name, folderName });
   
   storeApprovalStatus(approvalId, {
     status: 'denied',
@@ -672,9 +794,9 @@ async function handleShareApprovalWithCardResponse(context, data, approver) {
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration) || 86400;
   const editable = data.editable === 'true' || data.editable === true;
-  const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const processedTime = getCurrentTimestamp();
   
-  log.debug('Approving one-time share via Universal Action', { approver: approver.name, recordTitle, requesterName, duration, editable });
+  log.info('Approving one-time share via Universal Action', { approvalId, approver: approver.name, recordTitle, duration, editable });
   
   if (!recordUid) {
     log.error('Missing record UID for share');
@@ -831,9 +953,9 @@ async function handleShareApprovalWithCardResponse(context, data, approver) {
 
 async function handleShareDenialWithCardResponse(context, data, approver) {
   const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
-  const processedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const processedTime = getCurrentTimestamp();
   
-  log.debug('Denying one-time share via Universal Action', { approver: approver.name, recordTitle, requesterName });
+  log.info('Denying one-time share via Universal Action', { approvalId, approver: approver.name, recordTitle });
   
   storeApprovalStatus(approvalId, {
     status: 'denied',

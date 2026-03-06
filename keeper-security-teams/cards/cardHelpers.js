@@ -197,10 +197,20 @@ function formatFolderPermissionLabel(permission) {
   return found ? found.title : permission;
 }
 
+/**
+ * Get current timestamp formatted for display
+ * Returns format: "YYYY-MM-DD HH:MM:SS"
+ * @returns {string} Formatted timestamp
+ */
+function getCurrentTimestamp() {
+  return new Date().toISOString().replace('T', ' ').substring(0, 19);
+}
+
 module.exports = {
   buildSearchCardHeader,
   buildNoResultsSection,
   buildFoundItemsHeader,
   formatPermissionLabel,
   formatFolderPermissionLabel,
+  getCurrentTimestamp,
 };

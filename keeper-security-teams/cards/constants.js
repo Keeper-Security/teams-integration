@@ -58,10 +58,16 @@ const SELF_DESTRUCT_DURATION_OPTIONS = [
   { title: '90 days', value: '90d' },
 ];
 
+/**
+ * Default duration for access grants and shares
+ */
+const DEFAULT_DURATION = '24h';
+
 module.exports = {
   RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS,
   DURATION_OPTIONS,
   SHARE_DURATION_OPTIONS,
   SELF_DESTRUCT_DURATION_OPTIONS,
+  DEFAULT_DURATION,
 };

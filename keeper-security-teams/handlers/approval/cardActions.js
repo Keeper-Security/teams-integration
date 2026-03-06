@@ -490,7 +490,7 @@ async function handleSubmitCreateRecord(data, formData) {
     return {
       type: 'AdaptiveCard',
       '$schema': 'https://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.4',
+      version: '1.5',
       body: [
         { type: 'TextBlock', text: 'Record Creation Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
         { type: 'TextBlock', text: `Error: ${result.error || 'Unknown error'}`, wrap: true },
@@ -526,7 +526,7 @@ async function handleSubmitCreateRecord(data, formData) {
   const createdRecordCard = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.4',
+    version: '1.5',
     body: [
       { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
       { type: 'TextBlock', text: `Requester: ${safeRequesterName}`, wrap: true },
