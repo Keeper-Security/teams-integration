@@ -1,0 +1,90 @@
+{
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.24/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.24",
+    "version": "1.0.2",
+    "id": "${{TEAMS_APP_ID}}",
+    "developer": {
+        "name": "Keeper Security",
+        "websiteUrl": "https://www.keepersecurity.com",
+        "privacyUrl": "https://www.keepersecurity.com/privacy",
+        "termsOfUseUrl": "https://www.keepersecurity.com/termsofuse"
+    },
+    "icons": {
+        "color": "color.png",
+        "outline": "outline.png"
+    },
+    "name": {
+        "short": "Keeper Security",
+        "full": "Keeper Security - Credential Management Bot"
+    },
+    "description": {
+        "short": "Securely request and share credentials via Keeper Vault",
+        "full": "Keeper Security bot for Microsoft Teams. Request access to records and folders, share credentials securely with one-time links, and manage approval workflows directly from Teams."
+    },
+    "accentColor": "#0D6EFD",
+    "bots": [
+        {
+            "botId": "${{BOT_ID}}",
+            "scopes": [
+                "personal",
+                "team",
+                "groupChat"
+            ],
+            "supportsFiles": false,
+            "isNotificationOnly": false,
+            "commandLists": [
+                {
+                  "scopes": ["personal", "team", "groupChat"],
+                "commands": [
+                    {
+                        "title": "keeper-request-record",
+                          "description": "Request access to a record. Usage: keeper-request-record \"Record UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "keeper-request-folder",
+                          "description": "Request access to a folder. Usage: keeper-request-folder \"Folder UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "keeper-one-time-share",
+                          "description": "Request a one-time share link. Usage: keeper-one-time-share \"Record UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "help",
+                        "description": "Show available commands and usage."
+                    }
+                ]
+                }
+            ]
+        }
+    ],
+    "composeExtensions": [],
+    "configurableTabs": [],
+    "staticTabs": [],
+    "permissions": [
+        "identity",
+        "messageTeamMembers"
+    ],
+    "validDomains": [],
+    "webApplicationInfo": {
+        "id": "${{BOT_ID}}",
+        "resource": "api://botid-${{BOT_ID}}"
+    },
+    "authorization": {
+        "permissions": {
+            "resourceSpecific": [
+                {
+                    "name": "ChannelMessage.Read.Group",
+                    "type": "Application"
+                },
+                {
+                    "name": "ChannelMessage.Send.Group",
+                    "type": "Application"
+                },
+                {
+                    "name": "ChannelMessage.Update.Group",
+                    "type": "Application"
+                }
+            ]
+        }
+    }
+}

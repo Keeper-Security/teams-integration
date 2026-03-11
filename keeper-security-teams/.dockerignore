@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Node modules
+node_modules
+
+# Development files
+.vscode
+.cursor
+*.log
+logs/
+
+# Environment files
+.env
+.env.*
+!.env.example
+.localConfigs
+.localConfigs.*
+
+# Teams Toolkit files
+env/
+appPackage/build/
+devTools/
+
+# Test files
+*.test.js
+*.spec.js
+__tests__/
+coverage/
+
+# Documentation
+*.md
+!README.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+*.swp
+*.swo
+*~
+
+# Build artifacts
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
