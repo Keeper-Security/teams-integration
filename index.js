@@ -7,7 +7,7 @@ const healthServer = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       status: "healthy",
-      service: "keeper-teams-bot",
+      service: "keeper-teams-app",
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     }));
