@@ -1,14 +1,19 @@
+# Release workflow: builds and pushes Docker image to DockerHub on version tags.
+#
+# To create a release:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# This will build and push keeper/teams-app:v1.0.0, :latest, and :sha
+
 name: Build and Push Docker Image
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main]
 
 jobs:
-  build-and-push:
+  release:
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -26,19 +31,10 @@ jobs:
           version: 3.x
 
       - name: Log in to DockerHub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build
-        run: task build
-
-      - name: Push
-        if: github.event_name != 'pull_request'
-        run: task push
-
-      - name: Release (tagged)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Build and push release
         run: task release TAG=${{ github.ref_name }}
