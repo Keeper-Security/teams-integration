@@ -1,4 +1,4 @@
-# Keeper Teams Bot Dockerfile
+# Keeper Teams App Dockerfile
 FROM node:20-slim
 
 # Set working directory
@@ -24,7 +24,7 @@ COPY . .
 # Create data directory for persistence (conversation references, etc.)
 RUN mkdir -p /app/data
 
-# Expose ports (3978 for bot, 3979 for health check)
+# Expose ports (3978 for app, 3979 for health check)
 EXPOSE 3978 3979
 
 # Health check (uses dedicated health check port)

@@ -1,6 +1,7 @@
-# Git
+# Git & CI
 .git
 .gitignore
+.github
 
 # Node modules
 node_modules

@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.user
+.localConfigs
+.localConfigs.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Persistent data (channel service)
+/data/
+
+# Build artifacts
+dist/
+build/
+coverage/
+appPackage/build/
+
+# IDE
+.vscode/
+.cursor/
+.idea/
+*.swp
+*.swo
+*~
+
+# Misc
+tmp/
+.notification.*.json
+.deployment
+/devTools/

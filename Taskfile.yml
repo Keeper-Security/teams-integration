@@ -1,0 +1,60 @@
+version: '3'
+
+vars:
+  IMAGE_NAME: keeper/teams-app
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  SHA:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+
+tasks:
+  build:
+    desc: Build the Docker image
+    cmds:
+      - docker build -t {{.IMAGE_NAME}}:{{.SHA}} -t {{.IMAGE_NAME}}:latest .
+
+  push:
+    desc: Push Docker image to DockerHub
+    cmds:
+      - docker push {{.IMAGE_NAME}}:{{.SHA}}
+      - docker push {{.IMAGE_NAME}}:latest
+
+  release:
+    desc: Build and push a tagged release (usage - task release TAG=v1.0.0)
+    requires:
+      vars: [TAG]
+    cmds:
+      - docker build -t {{.IMAGE_NAME}}:{{.TAG}} -t {{.IMAGE_NAME}}:{{.SHA}} -t {{.IMAGE_NAME}}:latest .
+      - docker push {{.IMAGE_NAME}}:{{.TAG}}
+      - docker push {{.IMAGE_NAME}}:{{.SHA}}
+      - docker push {{.IMAGE_NAME}}:latest
+
+  dev:
+    desc: Run the app locally with nodemon
+    cmds:
+      - npm run dev
+
+  start:
+    desc: Start the app
+    cmds:
+      - npm start
+
+  up:
+    desc: Start all services with Docker Compose
+    cmds:
+      - docker compose up -d
+
+  down:
+    desc: Stop all services
+    cmds:
+      - docker compose down
+
+  logs:
+    desc: Tail logs from all services
+    cmds:
+      - docker compose logs -f
+
+  clean:
+    desc: Remove built Docker images
+    cmds:
+      - docker rmi {{.IMAGE_NAME}}:latest {{.IMAGE_NAME}}:{{.SHA}} 2>/dev/null || true
