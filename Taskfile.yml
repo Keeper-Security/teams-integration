@@ -3,7 +3,7 @@ version: '3'
 vars:
   IMAGE_NAME: keeper/teams-app
   VERSION:
-    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+    sh: node -p "require('./package.json').version"
   SHA:
     sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
 
@@ -28,6 +28,25 @@ tasks:
       - docker push {{.IMAGE_NAME}}:{{.TAG}}
       - docker push {{.IMAGE_NAME}}:{{.SHA}}
       - docker push {{.IMAGE_NAME}}:latest
+
+  tag:
+    desc: Create a git tag from package.json version and push it
+    preconditions:
+      - sh: test -z "$(git status --porcelain)"
+        msg: "Working tree is not clean. Commit or stash changes first."
+      - sh: test "$(node -p "require('./package.json').version")" = "$(node -p "require('./appPackage/manifest.json').version")"
+        msg: "Version mismatch between package.json and appPackage/manifest.json"
+      - sh: '! git tag -l "v{{.VERSION}}" | grep -q .'
+        msg: "Tag v{{.VERSION}} already exists"
+    cmds:
+      - echo "Tagging v{{.VERSION}}"
+      - git tag v{{.VERSION}}
+      - git push origin v{{.VERSION}}
+
+  version:
+    desc: Show current version from package.json
+    cmds:
+      - echo "{{.VERSION}}"
 
   dev:
     desc: Run the app locally with nodemon

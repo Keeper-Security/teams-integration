@@ -1,10 +1,8 @@
 # Release workflow: builds and pushes Docker image to DockerHub on version tags.
 #
 # To create a release:
-#   git tag v1.0.0
-#   git push origin v1.0.0
-#
-# This will build and push keeper/teams-app:v1.0.0, :latest, and :sha
+#   1. Update "version" in package.json (and commit)
+#   2. Run: task tag
 
 name: Build and Push Docker Image
 
@@ -13,7 +11,34 @@ on:
     tags: ['v*']
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "Version check passed: v$PKG_VERSION"
+
+      - name: Verify tag matches manifest.json version
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./appPackage/manifest.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match appPackage/manifest.json version $MANIFEST_VERSION"
+            exit 1
+          fi
+          echo "Manifest version check passed: v$MANIFEST_VERSION"
+
   release:
+    needs: validate
     runs-on: ubuntu-latest
     environment: release
     permissions:
