@@ -36,7 +36,7 @@ tasks:
         msg: "Working tree is not clean. Commit or stash changes first."
       - sh: test "$(node -p "require('./package.json').version")" = "$(node -p "require('./appPackage/manifest.json').version")"
         msg: "Version mismatch between package.json and appPackage/manifest.json"
-      - sh: '! git tag -l "v{{.VERSION}}" | grep -q .'
+      - sh: 'test -z "$(git tag -l v{{.VERSION}})"'
         msg: "Tag v{{.VERSION}} already exists"
     cmds:
       - echo "Tagging v{{.VERSION}}"
