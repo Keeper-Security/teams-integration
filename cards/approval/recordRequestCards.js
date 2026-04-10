@@ -6,6 +6,7 @@
 const { RECORD_PERMISSIONS, DURATION_OPTIONS, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
 const { 
   buildSearchCardHeader, 
+  buildCreateSecretHeader,
   buildNoResultsSection, 
   formatPermissionLabel,
   getCurrentTimestamp,
@@ -521,8 +522,40 @@ function buildRecordConfirmationCard({
 }
 
 /**
+ * Result card after successful create-secret (self-service) submit
+ */
+function buildCreateSecretSuccessCard({
+  recordTitle,
+  recordUid,
+}) {
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.5',
+    body: [
+      { type: 'TextBlock', text: 'Secret created', weight: 'Bolder', size: 'Large', color: 'Good' },
+      {
+        type: 'FactSet',
+        facts: [
+          { title: 'Title', value: recordTitle || '—' },
+          { title: 'Record UID', value: recordUid || '—' },
+        ],
+      },
+      {
+        type: 'TextBlock',
+        text: 'Open the record in Keeper to view or edit credentials. Do not share passwords in Teams chat.',
+        wrap: true,
+        isSubtle: true,
+        spacing: 'Medium',
+      },
+    ],
+  };
+}
+
+/**
  * Build an inline record creation form card
  * Allows admin to create a new record directly on the approval card
+ * @param {boolean} [createSecretFlow] - True for /keeper-create-secret (self-service form)
  */
 function buildRecordCreationCard({
   approvalId,
@@ -535,6 +568,17 @@ function buildRecordCreationCard({
   originalRecordTitle,
   searchQuery,
   error,
+  createSecretFlow = false,
+  /** @type {Array<{title:string,value:string}>|null} Only when createSecretFlow — from share-report (create-secret command) */
+  sharedFolderChoices = null,
+  sharedFoldersLoadError = null,
+  /** When true (create-secret only): no share-report rows for this user — form and Create Secret are disabled; Cancel stays enabled */
+  noSharedFoldersForUser = false,
+  selectedTargetFolderUid = '_default_',
+  /** @type {Array<{title:string,value:string}>|null} Subfolders inside the selected shared folder */
+  subfolderChoices = null,
+  subfolderLoadError = null,
+  selectedSubfolderUid = '',
   // Preserve form values on validation error
   recordTitle: prevRecordTitle,
   recordLogin: prevRecordLogin,
@@ -542,7 +586,9 @@ function buildRecordCreationCard({
   recordUrl: prevRecordUrl,
   recordNotes: prevRecordNotes,
 }) {
-  const headerElements = buildSearchCardHeader('Create New Record', requesterName || 'Unknown', approvalId || 'N/A', justification || '');
+  const headerElements = createSecretFlow
+    ? buildCreateSecretHeader(requesterName || 'Unknown', requesterEmail || '')
+    : buildSearchCardHeader('Create New Record', requesterName || 'Unknown', approvalId || 'N/A', justification || '');
   
   const baseData = { 
     approvalId: approvalId || '', 
@@ -553,12 +599,30 @@ function buildRecordCreationCard({
     requesterName: requesterName || '', 
     justification: justification || '', 
     originalRecordTitle: originalRecordTitle || '',
+    createSecretFlow: !!createSecretFlow,
   };
   
-  const bodyElements = [
-    ...headerElements,
-    { type: 'TextBlock', text: 'Create a new record to share with the requester:', wrap: true, spacing: 'Medium' },
-  ];
+  const introText = createSecretFlow
+    ? 'Record title is required. Leave password empty to auto-generate one.'
+    : 'Create a new record to share with the requester:';
+
+  const secretFormLocked = createSecretFlow && noSharedFoldersForUser;
+  const inputEnabled = !secretFormLocked;
+
+  const bodyElements = [...headerElements];
+
+  if (secretFormLocked) {
+    bodyElements.push({
+      type: 'TextBlock',
+      text: "You don't have access to any shared folder. Please contact your Keeper administrator to request access.",
+      wrap: true,
+      color: 'Attention',
+      weight: 'Bolder',
+      spacing: 'Medium',
+    });
+  } else {
+    bodyElements.push({ type: 'TextBlock', text: introText, wrap: true, spacing: 'Medium' });
+  }
   
   // Show validation error if present
   if (error) {
@@ -571,44 +635,198 @@ function buildRecordCreationCard({
       spacing: 'Medium',
     });
   }
+
+  let folderChoiceValue = '';
+  if (
+    createSecretFlow &&
+    !secretFormLocked &&
+    Array.isArray(sharedFolderChoices) &&
+    sharedFolderChoices.length > 0
+  ) {
+    const allowed = new Set(sharedFolderChoices.map((c) => c.value));
+    const raw = selectedTargetFolderUid != null ? String(selectedTargetFolderUid).trim() : '';
+    folderChoiceValue = raw && allowed.has(raw) ? raw : '';
+    bodyElements.push(
+      { type: 'TextBlock', text: 'Save to folder *', weight: 'Bolder', spacing: 'Medium' },
+    );
+    bodyElements.push({
+      type: 'Input.ChoiceSet',
+      id: 'targetFolderUid',
+      choices: sharedFolderChoices,
+      value: folderChoiceValue,
+      isRequired: true,
+      errorMessage: 'Please select a shared folder',
+      isEnabled: inputEnabled,
+    });
+
+    // Subfolder section
+    const subfoldersRequested = Array.isArray(subfolderChoices);
+    const subfoldersLoaded = subfoldersRequested && subfolderChoices.length > 0;
+    const subfoldersEmpty = subfoldersRequested && subfolderChoices.length === 0 && !subfolderLoadError;
+    if (subfoldersLoaded) {
+      const selectedFolderName = (sharedFolderChoices || []).find((c) => c.value === folderChoiceValue)?.title || 'Selected folder';
+      const rootChoice = { title: 'Parent Folder (' + selectedFolderName + ')', value: '_root_' };
+      const allSubChoices = [rootChoice, ...subfolderChoices];
+      const allowedSub = new Set(allSubChoices.map((c) => c.value));
+      const rawSub = selectedSubfolderUid != null ? String(selectedSubfolderUid).trim() : '';
+      const subValue = rawSub && allowedSub.has(rawSub) ? rawSub : '_root_';
+      bodyElements.push(
+        { type: 'TextBlock', text: 'Subfolder (optional)', weight: 'Bolder', spacing: 'Small' },
+        {
+          type: 'Input.ChoiceSet',
+          id: 'targetSubfolderUid',
+          choices: allSubChoices,
+          value: subValue,
+          isEnabled: inputEnabled,
+        },
+      );
+    } else if (subfolderLoadError) {
+      bodyElements.push({
+        type: 'TextBlock',
+        text: String(subfolderLoadError),
+        wrap: true,
+        color: 'Attention',
+        size: 'Small',
+        spacing: 'Small',
+      });
+    } else if (subfoldersEmpty) {
+      bodyElements.push({
+        type: 'TextBlock',
+        text: 'No subfolders found under this folder.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'Small',
+      });
+    }
+
+    bodyElements.push({
+      type: 'ActionSet',
+      spacing: 'Small',
+      actions: [
+        {
+          type: 'Action.Execute',
+          title: subfoldersLoaded ? '\uD83D\uDD04 Reload Subfolders' : '\uD83D\uDCC2 Load Subfolders',
+          verb: 'load_subfolders',
+          data: { action: 'load_subfolders', ...baseData },
+        },
+      ],
+    });
+  } else if (createSecretFlow && !secretFormLocked && sharedFoldersLoadError) {
+    bodyElements.push({
+      type: 'ColumnSet',
+      spacing: 'Medium',
+      columns: [
+        {
+          type: 'Column',
+          width: 'stretch',
+          verticalContentAlignment: 'Center',
+          items: [
+            {
+              type: 'TextBlock',
+              text: String(sharedFoldersLoadError),
+              wrap: true,
+              color: 'Attention',
+            },
+          ],
+        },
+        {
+          type: 'Column',
+          width: 'auto',
+          verticalContentAlignment: 'Center',
+          items: [
+            {
+              type: 'ActionSet',
+              actions: [
+                {
+                  type: 'Action.Execute',
+                  title: '\u{1F504} Retry',
+                  verb: 'refresh_shared_folders',
+                  data: { action: 'refresh_shared_folders', ...baseData },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  }
   
   // Form fields - preserve values on validation error
   bodyElements.push(
-    // Title (required)
     { type: 'TextBlock', text: 'Title *', weight: 'Bolder', spacing: 'Medium' },
-    { type: 'Input.Text', id: 'recordTitle', placeholder: 'Enter record title...', value: prevRecordTitle || searchQuery || originalRecordTitle || '' },
-    
-    // Login (required)
-    { type: 'TextBlock', text: 'Login *', weight: 'Bolder', spacing: 'Small' },
-    { type: 'Input.Text', id: 'recordLogin', placeholder: 'Enter username or email...', value: prevRecordLogin || '' },
-    
-    // Password (optional - will generate if empty)
-    { type: 'TextBlock', text: 'Password (leave empty to auto-generate)', weight: 'Bolder', spacing: 'Small' },
-    { type: 'Input.Text', id: 'recordPassword', placeholder: 'Enter password or leave empty...', style: 'password', value: prevRecordPassword || '' },
-    
-    // URL (optional)
-    { type: 'TextBlock', text: 'URL (optional)', weight: 'Bolder', spacing: 'Small' },
-    { type: 'Input.Text', id: 'recordUrl', placeholder: 'https://example.com', value: prevRecordUrl || '' },
-    
-    // Notes (optional)
-    { type: 'TextBlock', text: 'Notes (optional)', weight: 'Bolder', spacing: 'Small' },
-    { type: 'Input.Text', id: 'recordNotes', placeholder: 'Add any notes...', isMultiline: true, value: prevRecordNotes || '' },
-    
-    // Divider before self-destruct options
-    { type: 'TextBlock', text: '─────────────────────────────', isSubtle: true, spacing: 'Medium' },
-    
-    // Self-destruct section header
-    { type: 'TextBlock', text: 'Self-Destruct Options', weight: 'Bolder', size: 'Medium', spacing: 'Small' },
-    { type: 'TextBlock', text: 'Enable this to automatically delete the record after a set time period.', size: 'Small', isSubtle: true, wrap: true },
-    
-    // Self-destruct toggle
-    { type: 'Input.Toggle', id: 'selfDestruct', title: 'Enable Self-Destruct', value: 'false' },
-    
-    // Self-destruct duration dropdown
-    { type: 'TextBlock', text: 'Delete After (only applies if self-destruct is enabled)', weight: 'Bolder', spacing: 'Small' },
-    { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: DEFAULT_DURATION, choices: SELF_DESTRUCT_DURATION_OPTIONS },
-    { type: 'TextBlock', text: 'This duration is ignored if self-destruct is not enabled above.', size: 'Small', isSubtle: true, wrap: true, color: 'Attention' },
+    {
+      type: 'Input.Text',
+      id: 'recordTitle',
+      placeholder: 'Enter record title...',
+      value: prevRecordTitle || searchQuery || originalRecordTitle || '',
+      ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
+    },
+    { type: 'TextBlock', text: createSecretFlow ? 'Login' : 'Login *', weight: 'Bolder', spacing: 'Small' },
+    {
+      type: 'Input.Text',
+      id: 'recordLogin',
+      placeholder: createSecretFlow ? 'Username or email' : 'Enter username or email...',
+      value: prevRecordLogin || '',
+      ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
+    },
+    { type: 'TextBlock', text: 'Password', weight: 'Bolder', spacing: 'Small' },
+    {
+      type: 'Input.Text',
+      id: 'recordPassword',
+      placeholder: createSecretFlow ? 'Leave empty for no password' : 'Enter password or leave empty...',
+      style: 'password',
+      value: prevRecordPassword || '',
+      ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
+    },
+    ...(createSecretFlow ? [
+      {
+        type: 'TextBlock',
+        text: '\uD83D\uDD12 End-to-end encrypted. Your data is protected by Keeper\u2019s zero-knowledge architecture.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'None',
+        color: 'Warning',
+      },
+      {
+        type: 'Input.Toggle',
+        id: 'autoGeneratePassword',
+        title: 'Auto-generate a strong password',
+        value: 'false',
+        ...(inputEnabled ? {} : { isEnabled: false }),
+      },
+    ] : []),
+    { type: 'TextBlock', text: createSecretFlow ? 'URL' : 'URL (optional)', weight: 'Bolder', spacing: 'Small' },
+    {
+      type: 'Input.Text',
+      id: 'recordUrl',
+      placeholder: 'https://example.com',
+      value: prevRecordUrl || '',
+      ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
+    },
+    { type: 'TextBlock', text: createSecretFlow ? 'Notes' : 'Notes (optional)', weight: 'Bolder', spacing: 'Small' },
+    {
+      type: 'Input.Text',
+      id: 'recordNotes',
+      placeholder: 'Add any notes...',
+      isMultiline: true,
+      value: prevRecordNotes || '',
+      ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
+    },
   );
+
+  if (!createSecretFlow) {
+    bodyElements.push(
+      { type: 'TextBlock', text: '─────────────────────────────', isSubtle: true, spacing: 'Medium' },
+      { type: 'TextBlock', text: 'Self-Destruct Options', weight: 'Bolder', size: 'Medium', spacing: 'Small' },
+      { type: 'TextBlock', text: 'Enable this to automatically delete the record after a set time period.', size: 'Small', isSubtle: true, wrap: true },
+      { type: 'Input.Toggle', id: 'selfDestruct', title: 'Enable Self-Destruct', value: 'false' },
+      { type: 'TextBlock', text: 'Delete After (only applies if self-destruct is enabled)', weight: 'Bolder', spacing: 'Small' },
+      { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: DEFAULT_DURATION, choices: SELF_DESTRUCT_DURATION_OPTIONS },
+      { type: 'TextBlock', text: 'This duration is ignored if self-destruct is not enabled above.', size: 'Small', isSubtle: true, wrap: true, color: 'Attention' },
+    );
+  }
   
   return {
     type: 'AdaptiveCard',
@@ -618,16 +836,21 @@ function buildRecordCreationCard({
     actions: [
       {
         type: 'Action.Execute',
-        title: 'Create Record',
+        title: createSecretFlow ? 'Create Secret' : 'Create Record',
         style: 'positive',
         verb: 'submit_create_record',
+        isEnabled: !secretFormLocked,
         data: { action: 'submit_create_record', ...baseData },
       },
       {
         type: 'Action.Execute',
         title: 'Cancel',
-        verb: 'cancel_create_form',
-        data: { action: 'cancel_create_form', ...baseData, searchQuery },
+        verb: createSecretFlow ? 'cancel_create_secret' : 'cancel_create_form',
+        isEnabled: true,
+        associatedInputs: 'none',
+        data: createSecretFlow
+          ? { action: 'cancel_create_secret', ...baseData }
+          : { action: 'cancel_create_form', ...baseData, searchQuery },
       },
     ],
   };
@@ -1025,6 +1248,7 @@ module.exports = {
   buildRecordApprovalCardWithStatus,
   buildRecordConfirmationCard,
   buildRecordCreationCard,
+  buildCreateSecretSuccessCard,
   buildRecordCreatedCard,
   buildRecordInvitationSentCard,
   buildRecordAlreadyHasAccessCard,

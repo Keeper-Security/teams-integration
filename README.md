@@ -312,7 +312,7 @@ services:
     ports:
     - 127.0.0.1:<port>:<port>
     image: keeper/commander:latest
-    command: service-create -p <port> -c 'search,share-record,share-folder,record-add,one-time-share,pedm,device-approve,get' -f json -q y -ur <CONFIG_RECORD_UID> --ksm-config <KSM_CONFIG_BASE64_VALUE> --record <CONFIG_RECORD_UID>
+    command: service-create -p <port> -c 'search,share-record,share-folder,share-report,record-add,tree,one-time-share,pedm,device-approve,get' -f json -q y -ur <CONFIG_RECORD_UID> --ksm-config <KSM_CONFIG_BASE64_VALUE> --record <CONFIG_RECORD_UID>
     healthcheck:
       test:
       - CMD-SHELL
@@ -535,6 +535,34 @@ keeper-one-time-share <record-uid-or-description> <justification>
 keeper-one-time-share kR3cF9Xm2Lp8NqT1uV6w Need to share with contractor John
 keeper-one-time-share "AWS Production Password" Sharing with vendor for audit
 ```
+
+### keeper-create-secret
+
+Create a new login record directly in your Keeper vault. The record is saved to a shared folder that you have access to, with optional subfolder selection.
+
+**Syntax:**
+
+```
+keeper-create-secret ["<title>"] ["<notes>"]
+```
+
+Both title and notes are optional — if provided, they pre-fill the form. Wrap values in quotes if they contain spaces.
+
+**Examples:**
+
+```
+keeper-create-secret
+keeper-create-secret "Staging new cred's"
+keeper-create-secret "Staging new cred's" Testing Note
+```
+
+**Features:**
+- Shared folder selection (required) with subfolder support
+- Optional auto-generate password via checkbox
+- Zero-knowledge disclaimer on password field
+- Notification sent to approvers channel on successful creation
+
+**Aliases:** `create-secret`, `createsecret`, `kcs`
 
 ### help
 

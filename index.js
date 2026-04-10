@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const http = require("http");
 
 const HEALTH_PORT = process.env.HEALTH_PORT || 3979;

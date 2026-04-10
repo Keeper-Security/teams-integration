@@ -103,7 +103,11 @@ app.on("message", async (context) => {
   log.info(`Received message: "${text}"`);
 
   // ==================== Capture Conversation References ====================
-  
+  log.info('Channel check debug', {
+    teamsChannelId: activity.channelData?.teamsChannelId,
+    conversationId: activity.conversation?.id,
+    configuredId: getConfig().teams?.approvalsChannelId,
+  });
   if (isApprovalsChannel(activity)) {
     channelService.captureConversationReference(context, 'approvals');
     log.info('Captured approvals channel reference');
@@ -356,46 +360,205 @@ app.on("invoke", async (context) => {
     if (verb === 'submit_create_record') {
       try {
         log.debug('Processing submit_create_record - START');
-        
-        // Extract form data
-        const recordTitle = activity.value?.action?.data?.recordTitle || data.recordTitle || '';
-        const recordLogin = activity.value?.action?.data?.recordLogin || data.recordLogin || '';
-        const recordPassword = activity.value?.action?.data?.recordPassword || data.recordPassword || '';
-        const recordUrl = activity.value?.action?.data?.recordUrl || data.recordUrl || '';
-        const recordNotes = activity.value?.action?.data?.recordNotes || data.recordNotes || '';
-        
-        // Extract self-destruct options
-        const selfDestructToggle = activity.value?.action?.data?.selfDestruct || data.selfDestruct || 'false';
-        const selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
-        const selfDestructDuration = selfDestructEnabled 
-          ? (activity.value?.action?.data?.selfDestructDuration || data.selfDestructDuration || '24h')
-          : null;
-        
-        // Validation - return form with error message if validation fails
-        if (!recordTitle?.trim() || !recordLogin?.trim()) {
+
+        const v = activity.value || {};
+        const merged = {
+          ...data,
+          ...(v.action?.data || {}),
+          ...(v.data || {}),
+        };
+
+        const isCreateSecretFlow =
+          merged.createSecretFlow === true ||
+          merged.createSecretFlow === 'true';
+
+        const recordTitle = merged.recordTitle || '';
+        const recordLogin = merged.recordLogin || '';
+        const recordPassword = merged.recordPassword || '';
+        const recordUrl = merged.recordUrl || '';
+        const recordNotes = merged.recordNotes || '';
+        const targetFolderUidRaw = merged.targetFolderUid;
+
+        let selfDestructEnabled = false;
+        let selfDestructDuration = null;
+        if (!isCreateSecretFlow) {
+          const selfDestructToggle = merged.selfDestruct || 'false';
+          selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
+          selfDestructDuration = selfDestructEnabled
+            ? (merged.selfDestructDuration || '24h')
+            : null;
+        }
+
+        const cards = require('./cards');
+
+        const buildApprovalValidationCard = (errorMessage) =>
+          cards.buildRecordCreationCard({
+            approvalId: merged.approvalId,
+            requesterName: merged.requesterName,
+            requesterId: merged.requesterId,
+            requesterEmail: merged.requesterEmail,
+            requesterAadObjectId: merged.requesterAadObjectId,
+            justification: merged.justification,
+            identifier: merged.identifier,
+            originalRecordTitle: merged.originalRecordTitle,
+            searchQuery: merged.searchQuery,
+            createSecretFlow: false,
+            error: errorMessage,
+            recordTitle,
+            recordLogin,
+            recordPassword,
+            recordUrl,
+            recordNotes,
+          });
+
+        const pickValidTargetFolderUid = (raw, choices) => {
+          if (!choices?.length) return '_default_';
+          const allowed = new Set(choices.map((c) => c.value));
+          const v = raw != null ? String(raw).trim() : '';
+          if (v && allowed.has(v)) return v;
+          return '_default_';
+        };
+
+        const buildCreateSecretCardFromFolderResult = (folderResult, errorMessage) => {
+          const choiceSetChoices = folderResult.choiceSetChoices;
+          const sharedFoldersLoadError = folderResult.error;
+          const noSharedFoldersForUser = !!folderResult.noSharedFoldersForUser;
+          const selected = pickValidTargetFolderUid(targetFolderUidRaw, choiceSetChoices);
+          return cards.buildRecordCreationCard({
+            approvalId: merged.approvalId,
+            requesterName: merged.requesterName,
+            requesterId: merged.requesterId,
+            requesterEmail: merged.requesterEmail,
+            requesterAadObjectId: merged.requesterAadObjectId,
+            justification: merged.justification,
+            identifier: merged.identifier,
+            originalRecordTitle: merged.originalRecordTitle,
+            searchQuery: merged.searchQuery,
+            createSecretFlow: true,
+            sharedFolderChoices: choiceSetChoices,
+            sharedFoldersLoadError,
+            noSharedFoldersForUser,
+            selectedTargetFolderUid: selected,
+            ...(errorMessage ? { error: errorMessage } : {}),
+            recordTitle,
+            recordLogin,
+            recordPassword,
+            recordUrl,
+            recordNotes,
+          });
+        };
+
+        const buildCreateSecretValidationCard = async (errorMessage) => {
+          const keeperClient = require('./services/keeperClient');
+          const folderResult = await keeperClient.getSharedFolderChoicesForEmail(merged.requesterEmail || '');
+          return buildCreateSecretCardFromFolderResult(folderResult, errorMessage);
+        };
+
+        if (isCreateSecretFlow) {
+          const folderSelected = targetFolderUidRaw && String(targetFolderUidRaw).trim() && targetFolderUidRaw !== '_default_';
+          const validationErrors = [];
+          if (!folderSelected) validationErrors.push('Shared folder selection is required');
+          if (!recordTitle?.trim()) validationErrors.push('Title is required');
+          if (validationErrors.length > 0) {
+            const errorMessage = validationErrors.join('. ');
+            log.debug(`Validation failed: ${errorMessage}`);
+            return {
+              statusCode: 200,
+              type: 'application/vnd.microsoft.card.adaptive',
+              value: await buildCreateSecretValidationCard(errorMessage),
+            };
+          }
+        } else if (!recordTitle?.trim() || !recordLogin?.trim()) {
           const errors = [];
           if (!recordTitle?.trim()) errors.push('Title is required');
           if (!recordLogin?.trim()) errors.push('Login is required');
           const errorMessage = errors.join('. ');
-          
           log.debug(`Validation failed: ${errorMessage}`);
-          
-          const cards = require('./cards');
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
-            value: cards.buildRecordCreationCard({
-              ...data,
-              error: errorMessage,
-              recordTitle: recordTitle,
-              recordLogin: recordLogin,
-              recordPassword: recordPassword,
-              recordUrl: recordUrl,
-              recordNotes: recordNotes,
-            }),
+            value: buildApprovalValidationCard(errorMessage),
           };
         }
-        
+
+        if (isCreateSecretFlow) {
+          log.debug('submit_create_record: create-secret (self-service) flow');
+          const keeperClient = require('./services/keeperClient');
+          const autoGenToggle = merged.autoGeneratePassword || 'false';
+          const generatePassword = autoGenToggle === 'true' || autoGenToggle === true;
+          const loginTrimmed = recordLogin?.trim() || '';
+
+          const subfolderUidRaw = merged.targetSubfolderUid;
+          const subfolderUid = subfolderUidRaw && String(subfolderUidRaw).trim() && subfolderUidRaw !== '_root_'
+            ? String(subfolderUidRaw).trim()
+            : null;
+          const folderUid = subfolderUid
+            || (targetFolderUidRaw && String(targetFolderUidRaw).trim() && targetFolderUidRaw !== '_default_'
+              ? String(targetFolderUidRaw).trim()
+              : null);
+
+          const passwordValue = generatePassword ? '$GEN' : (recordPassword?.trim() || null);
+
+          const result = await keeperClient.createRecord({
+            title: recordTitle.trim(),
+            ...(loginTrimmed ? { login: loginTrimmed } : {}),
+            password: passwordValue,
+            url: recordUrl?.trim() || null,
+            notes: recordNotes?.trim() || null,
+            generatePassword: generatePassword,
+            selfDestructDuration: null,
+            folderUid,
+          });
+
+          if (result.success) {
+            // Fire-and-forget notification to approvers channel
+            const channelService = getChannelService();
+            if (channelService && channelService.isApprovalsChannelReady()) {
+              const notificationCard = {
+                type: 'AdaptiveCard',
+                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+                version: '1.5',
+                body: [
+                  { type: 'TextBlock', text: 'New Secret Created', weight: 'Bolder', size: 'Medium' },
+                  {
+                    type: 'FactSet',
+                    facts: [
+                      { title: 'Created by', value: merged.requesterName || 'Unknown' },
+                      { title: 'Email', value: merged.requesterEmail || '—' },
+                      { title: 'Title', value: recordTitle.trim() },
+                      ...(result.recordUid ? [{ title: 'Record UID', value: result.recordUid }] : []),
+                      ...(folderUid ? [{ title: 'Folder UID', value: folderUid }] : []),
+                    ],
+                  },
+                ],
+              };
+              channelService.sendApprovalCardViaConnector(
+                notificationCard,
+                merged.approvalId || 'create-secret',
+                `New secret created by **${merged.requesterName || 'Unknown'}**`
+              ).catch((err) => log.error('Failed to send create-secret notification', err.message));
+            }
+
+            return {
+              statusCode: 200,
+              type: 'application/vnd.microsoft.card.adaptive',
+              value: cards.buildCreateSecretSuccessCard({
+                recordTitle: recordTitle.trim(),
+                recordUid: result.recordUid,
+              }),
+            };
+          }
+
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: await buildCreateSecretValidationCard(result.error || 'Failed to create record'),
+          };
+        }
+
+        // --- Approval-channel create flow (unchanged): async + proactive message to approvals ---
+        const approvalPayload = merged;
+
         // Store context for proactive messaging
         const conversationRef = {
           serviceUrl: activity.serviceUrl,
@@ -434,8 +597,8 @@ app.on("invoke", async (context) => {
               // Build body elements
               const bodyElements = [
                 { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
-                { type: 'TextBlock', text: `Requester: ${data.requesterName || 'Unknown'}`, wrap: true },
-                { type: 'TextBlock', text: `Justification: ${data.justification || 'N/A'}`, wrap: true, isSubtle: true },
+                { type: 'TextBlock', text: `Requester: ${approvalPayload.requesterName || 'Unknown'}`, wrap: true },
+                { type: 'TextBlock', text: `Justification: ${approvalPayload.justification || 'N/A'}`, wrap: true, isSubtle: true },
                 { 
                   type: 'Container', 
                   style: 'good', 
@@ -483,13 +646,13 @@ app.on("invoke", async (context) => {
                     verb: 'approve_record',
                     data: { 
                       action: 'approve_record', 
-                      approvalId: data.approvalId || '', 
+                      approvalId: approvalPayload.approvalId || '', 
                       recordUid: result.recordUid, 
                       recordTitle: recordTitle.trim(), 
-                      requesterId: data.requesterId || '', 
-                      requesterEmail: data.requesterEmail || '', 
-                      requesterName: data.requesterName || '', 
-                      justification: data.justification || '',
+                      requesterId: approvalPayload.requesterId || '', 
+                      requesterEmail: approvalPayload.requesterEmail || '', 
+                      requesterName: approvalPayload.requesterName || '', 
+                      justification: approvalPayload.justification || '',
                       selfDestruct: selfDestructEnabled,
                       selfDestructDuration: selfDestructDuration,
                     },
@@ -501,13 +664,13 @@ app.on("invoke", async (context) => {
                     verb: 'deny_record',
                     data: { 
                       action: 'deny_record', 
-                      approvalId: data.approvalId || '', 
+                      approvalId: approvalPayload.approvalId || '', 
                       recordUid: result.recordUid, 
                       recordTitle: recordTitle.trim(), 
-                      requesterId: data.requesterId || '', 
-                      requesterEmail: data.requesterEmail || '', 
-                      requesterName: data.requesterName || '', 
-                      justification: data.justification || '',
+                      requesterId: approvalPayload.requesterId || '', 
+                      requesterEmail: approvalPayload.requesterEmail || '', 
+                      requesterName: approvalPayload.requesterName || '', 
+                      justification: approvalPayload.justification || '',
                     },
                   },
                 ],
@@ -522,7 +685,7 @@ app.on("invoke", async (context) => {
                   { type: 'TextBlock', text: result.error || 'Unknown error occurred', wrap: true },
                 ],
                 actions: [
-                  { type: 'Action.Execute', title: 'Try Again', verb: 'show_create_form', data: data },
+                  { type: 'Action.Execute', title: 'Try Again', verb: 'show_create_form', data: approvalPayload },
                 ],
               };
             }
@@ -531,7 +694,7 @@ app.on("invoke", async (context) => {
               try {
                 const sent = await channelService.sendApprovalCardViaConnector(
                   resultCard, 
-                  data.approvalId || 'create-record',
+                  approvalPayload.approvalId || 'create-record',
                   result.success ? `Record "${recordTitle.trim()}" created successfully!` : null
                 );
                 log.debug('Background: Sent result card via channelService', sent.success);
@@ -568,6 +731,121 @@ app.on("invoke", async (context) => {
       }
     }
     
+    if (verb === 'refresh_shared_folders') {
+      try {
+        log.debug('Processing refresh_shared_folders');
+        const keeperClient = require('./services/keeperClient');
+        const cards = require('./cards');
+
+        const v = activity.value || {};
+        const merged = { ...data, ...(v.action?.data || {}), ...(v.data || {}) };
+
+        const folderResult = await keeperClient.getSharedFolderChoicesForEmail(merged.requesterEmail || '');
+
+        const refreshedCard = cards.buildRecordCreationCard({
+          approvalId: merged.approvalId,
+          requesterName: merged.requesterName,
+          requesterId: merged.requesterId,
+          requesterEmail: merged.requesterEmail,
+          requesterAadObjectId: merged.requesterAadObjectId,
+          justification: merged.justification,
+          identifier: merged.identifier,
+          originalRecordTitle: merged.originalRecordTitle,
+          searchQuery: merged.searchQuery,
+          createSecretFlow: true,
+          sharedFolderChoices: folderResult.choiceSetChoices,
+          sharedFoldersLoadError: folderResult.error,
+          noSharedFoldersForUser: !!folderResult.noSharedFoldersForUser,
+          selectedTargetFolderUid: '_default_',
+          recordTitle: merged.recordTitle || '',
+          recordLogin: merged.recordLogin || '',
+          recordPassword: merged.recordPassword || '',
+          recordUrl: merged.recordUrl || '',
+          recordNotes: merged.recordNotes || '',
+        });
+
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: refreshedCard,
+        };
+      } catch (error) {
+        log.error('Error handling refresh_shared_folders', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+
+    if (verb === 'load_subfolders') {
+      try {
+        log.debug('Processing load_subfolders');
+        const keeperClient = require('./services/keeperClient');
+        const cards = require('./cards');
+
+        const v = activity.value || {};
+        const merged = { ...data, ...(v.action?.data || {}), ...(v.data || {}) };
+        const selectedFolder = v.targetFolderUid || merged.targetFolderUid;
+
+        if (!selectedFolder || !String(selectedFolder).trim()) {
+          log.debug('load_subfolders: no folder selected');
+          return { statusCode: 200 };
+        }
+
+        const folderResult = await keeperClient.getSharedFolderChoicesForEmail(merged.requesterEmail || '');
+        const subfolderResult = await keeperClient.getSubfoldersForSharedFolder(String(selectedFolder).trim());
+
+        const refreshedCard = cards.buildRecordCreationCard({
+          approvalId: merged.approvalId,
+          requesterName: merged.requesterName,
+          requesterId: merged.requesterId,
+          requesterEmail: merged.requesterEmail,
+          requesterAadObjectId: merged.requesterAadObjectId,
+          justification: merged.justification,
+          identifier: merged.identifier,
+          originalRecordTitle: merged.originalRecordTitle,
+          searchQuery: merged.searchQuery,
+          createSecretFlow: true,
+          sharedFolderChoices: folderResult.choiceSetChoices,
+          sharedFoldersLoadError: folderResult.error,
+          noSharedFoldersForUser: !!folderResult.noSharedFoldersForUser,
+          selectedTargetFolderUid: selectedFolder,
+          subfolderChoices: subfolderResult.choices,
+          subfolderLoadError: subfolderResult.error,
+          selectedSubfolderUid: v.targetSubfolderUid || merged.targetSubfolderUid || '',
+          recordTitle: v.recordTitle || merged.recordTitle || '',
+          recordLogin: v.recordLogin || merged.recordLogin || '',
+          recordPassword: v.recordPassword || merged.recordPassword || '',
+          recordUrl: v.recordUrl || merged.recordUrl || '',
+          recordNotes: v.recordNotes || merged.recordNotes || '',
+        });
+
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: refreshedCard,
+        };
+      } catch (error) {
+        log.error('Error handling load_subfolders', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+
+    if (verb === 'cancel_create_secret') {
+      log.debug('Processing cancel_create_secret');
+      return {
+        statusCode: 200,
+        type: 'application/vnd.microsoft.card.adaptive',
+        value: {
+          type: 'AdaptiveCard',
+          '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+          version: '1.5',
+          body: [
+            { type: 'TextBlock', text: 'Cancelled', weight: 'Bolder', size: 'Medium' },
+            { type: 'TextBlock', text: 'No record was created.', wrap: true, isSubtle: true },
+          ],
+        },
+      };
+    }
+
     if (verb === 'cancel_create_form') {
       try {
         log.debug('Processing cancel_create_form');
@@ -1027,7 +1305,7 @@ app.start = async (...args) => {
   
   const keeperClient = require('./services/keeperClient');
   const currentConfig = getConfig();
-  const serviceUrl = currentConfig.keeper?.serviceUrl || 'http://localhost:8900/api/v2/';
+  const serviceUrl = currentConfig.keeper?.serviceUrl || 'http://localhost:7001/api/v2/';
   
   try {
     const isHealthy = await keeperClient.healthCheck();

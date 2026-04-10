@@ -326,6 +326,13 @@ function buildHelpCard() {
       {
         type: 'Container',
         items: [
+          { type: 'TextBlock', text: 'Create', weight: 'Bolder', color: 'Accent' },
+          { type: 'TextBlock', text: '• `keeper-create-secret` - Open form to create a login record (title, login, password, URL, notes)', wrap: true },
+        ],
+      },
+      {
+        type: 'Container',
+        items: [
           { type: 'TextBlock', text: 'Search', weight: 'Bolder', color: 'Accent' },
           { type: 'TextBlock', text: '• `search-records <query>` - Search records', wrap: true },
           { type: 'TextBlock', text: '• `search-folders <query>` - Search folders', wrap: true },

@@ -719,7 +719,134 @@ class KeeperClient {
     }
   }
 
-  async createRecord({ title, login, password, url, notes, generatePassword = false, selfDestructDuration = null }) {
+  /**
+   * Shared folders visible to the vault user from `share-report -f` (for create-secret folder picker).
+   * Rows are filtered to those where "Shared To" matches userEmail (case-insensitive).
+   * @param {string} userEmail - Requester work email (Graph)
+   * @returns {Promise<{ choiceSetChoices: Array<{title:string,value:string}>, error: string|null, noSharedFoldersForUser: boolean }>}
+   */
+  async getSharedFolderChoicesForEmail(userEmail) {
+    const defaultChoice = { title: 'My vault (default)', value: '_default_' };
+    const loadErrorResult = {
+      choiceSetChoices: [],
+      error: 'Unable to load shared folder list. Please try again.',
+      noSharedFoldersForUser: false,
+    };
+    try {
+      if (!userEmail || !String(userEmail).trim()) {
+        log.warn('getSharedFolderChoicesForEmail: email not resolved');
+        return loadErrorResult;
+      }
+      const command = 'share-report -f --format=json';
+      const result = await this._executeCommandAsync(command, 45);
+      if (!result || result.status !== 'success') {
+        const errMsg = this._formatError(result?.message) || 'Could not load shared folders';
+        log.warn('getSharedFolderChoicesForEmail failed', errMsg);
+        return loadErrorResult;
+      }
+
+      let rows = result.data;
+      if (typeof rows === 'string') {
+        try {
+          rows = JSON.parse(rows);
+        } catch {
+          rows = [];
+        }
+      }
+      if (!Array.isArray(rows)) {
+        rows = [];
+      }
+
+      const emailLower = String(userEmail).trim().toLowerCase();
+      const seen = new Set();
+      const out = [];
+
+      for (const row of rows) {
+        const sharedTo = String(row['Shared To'] || row.shared_to || row.SharedTo || '').trim().toLowerCase();
+        if (!sharedTo || sharedTo !== emailLower) {
+          continue;
+        }
+        const uid = row['Folder UID'] || row.folder_uid || row.folderUid;
+        if (!uid || seen.has(uid)) {
+          continue;
+        }
+        seen.add(uid);
+        const name = row['Folder Name'] || row.folder_name || uid;
+        const path = row['Folder Path'] || row['folder_path'] || name;
+        const label = path && path !== name ? `${name} (${path})` : String(name);
+        out.push({
+          title: label.length > 120 ? label.slice(0, 117) + '...' : label,
+          value: uid,
+        });
+      }
+
+      out.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+      if (out.length === 0) {
+        return {
+          choiceSetChoices: [],
+          error: null,
+          noSharedFoldersForUser: true,
+        };
+      }
+      return {
+        choiceSetChoices: out,
+        error: null,
+        noSharedFoldersForUser: false,
+      };
+    } catch (error) {
+      log.error('getSharedFolderChoicesForEmail exception', error.message);
+      return loadErrorResult;
+    }
+  }
+
+  /**
+   * Get subfolders inside a shared folder using `tree -s -v <folderUid>`.
+   * Returns a flat list of all subfolders (including nested) for the dropdown.
+   * @param {string} folderUid - The shared folder UID
+   * @returns {Promise<{ choices: Array<{title:string,value:string}>, error: string|null }>}
+   */
+  async getSubfoldersForSharedFolder(folderUid) {
+    try {
+      if (!folderUid || !String(folderUid).trim()) {
+        return { choices: [], error: null };
+      }
+      const command = 'tree -s -v ' + shellEscapeSearch(String(folderUid).trim());
+      const result = await this._executeCommandAsync(command, 20);
+      if (!result || result.status !== 'success') {
+        const errMsg = this._formatError(result?.message) || 'Could not load subfolders';
+        log.warn('getSubfoldersForSharedFolder failed', errMsg);
+        return { choices: [], error: 'Unable to load subfolders. Please try again.' };
+      }
+
+      const tree = result.data?.tree;
+      if (!Array.isArray(tree) || tree.length === 0) {
+        return { choices: [], error: null };
+      }
+
+      const choices = tree
+        .filter((item) => item.type === 'folder' && item.uid)
+        .map((item) => ({
+          title: item.path || item.name || item.uid,
+          value: item.uid,
+        }));
+
+      return { choices, error: null };
+    } catch (error) {
+      log.error('getSubfoldersForSharedFolder exception', error.message);
+      return { choices: [], error: 'Unable to load subfolders. Please try again.' };
+    }
+  }
+
+  async createRecord({
+    title,
+    login,
+    password,
+    url,
+    notes,
+    generatePassword = false,
+    selfDestructDuration = null,
+    folderUid = null,
+  }) {
     try {
       if (!title || !title.trim()) {
         return { success: false, error: 'Title is required' };
@@ -733,6 +860,10 @@ class KeeperClient {
       
       // Add title
       commandParts.push('--title ' + shellEscape(title));
+
+      if (folderUid && String(folderUid).trim() && String(folderUid).trim() !== '_default_') {
+        commandParts.push('--folder ' + shellEscapeSearch(String(folderUid).trim()));
+      }
       
       // Add notes if provided
       if (notes && notes.trim()) {
@@ -775,18 +906,28 @@ class KeeperClient {
         const errorMsg = this._formatError(result?.message);
         return { success: false, error: 'Failed to create record: ' + errorMsg };
       }
+
+      const recordUid = result.data?.record_uid;
+      if (recordUid) {
+        log.info('Record created with UID from response', { recordUid, title });
+        return {
+          success: true,
+          recordUid,
+          title,
+          generatedPassword: generatePassword || password === '$GEN',
+          isNewlyCreated: true,
+        };
+      }
       
       log.debug('Record created successfully, searching for UID...');
 
-      
       const maxRetries = 3;
-      const waitTimes = [2000, 3000, 4000]; // Increasing wait times: 2s, 3s, 4s
+      const waitTimes = [2000, 3000, 4000];
       
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         await new Promise(resolve => setTimeout(resolve, waitTimes[attempt]));
         
         try {
-
           const searchCommand = 'search ' + shellEscape(title) + ' --format=json';
           const searchResult = await this._executeCommandAsync(searchCommand, 10);
           
@@ -794,18 +935,17 @@ class KeeperClient {
             const data = Array.isArray(searchResult.data) ? searchResult.data : [];
             
             if (data.length > 0) {
-              // Find the record with matching title (most recently created should be first)
               const matchingRecord = data.find(r => r.title === title) || data[0];
-              const recordUid = matchingRecord.uid || matchingRecord.record_uid;
+              const uid = matchingRecord.uid || matchingRecord.record_uid;
               
-              if (recordUid) {
-                log.info('Found created record UID after attempt ' + (attempt + 1), { recordUid, title });
+              if (uid) {
+                log.info('Found created record UID after attempt ' + (attempt + 1), { recordUid: uid, title });
                 return {
                   success: true,
-                  recordUid: recordUid,
-                  title: title,
+                  recordUid: uid,
+                  title,
                   generatedPassword: generatePassword || password === '$GEN',
-                  isNewlyCreated: true, // Flag to indicate this is a newly created record
+                  isNewlyCreated: true,
                 };
               }
             }
@@ -1343,6 +1483,13 @@ try {
     grantRecordAccess: async () => ({ success: false, error: 'Client not initialized' }),
     grantFolderAccess: async () => ({ success: false, error: 'Client not initialized' }),
     createOneTimeShare: async () => ({ success: false, error: 'Client not initialized' }),
+    createRecord: async () => ({ success: false, error: 'Client not initialized' }),
+    getSharedFolderChoicesForEmail: async () => ({
+      choiceSetChoices: [],
+      error: 'Unable to load shared folder list. Please try again.',
+      noSharedFoldersForUser: false,
+    }),
+    getSubfoldersForSharedFolder: async () => ({ choices: [], error: 'Client not initialized' }),
     getPendingPedmRequests: async () => [],
     approvePedmRequest: async () => ({ success: false, error: 'Client not initialized' }),
     denyPedmRequest: async () => ({ success: false, error: 'Client not initialized' }),

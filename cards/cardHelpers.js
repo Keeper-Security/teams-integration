@@ -83,6 +83,35 @@ function buildSearchCardHeader(title, requesterName, approvalId, justification) 
 }
 
 /**
+ * Header for the self-service /keeper-create-secret form (not the admin approval create flow).
+ * Internal request IDs stay only on Action.Execute payloads; users see who is creating the record.
+ */
+function buildCreateSecretHeader(userName, userEmail) {
+  return [
+    {
+      type: 'TextBlock',
+      text: 'Create a new secret',
+      weight: 'Bolder',
+      size: 'ExtraLarge',
+    },
+    {
+      type: 'TextBlock',
+      text: 'Add a login record to your Keeper vault. Leave password empty to auto-generate.',
+      wrap: true,
+      isSubtle: true,
+      spacing: 'Small',
+    },
+    {
+      type: 'FactSet',
+      facts: [
+        { title: 'User', value: userName || 'Unknown' },
+        { title: 'Email', value: userEmail || '—' },
+      ],
+    },
+  ];
+}
+
+/**
  * Build "no results" section for search cards
  * @param {string} searchQuery - The search query that returned no results
  * @param {string} itemType - 'record', 'folder', or 'share'
@@ -208,6 +237,7 @@ function getCurrentTimestamp() {
 
 module.exports = {
   buildSearchCardHeader,
+  buildCreateSecretHeader,
   buildNoResultsSection,
   buildFoundItemsHeader,
   formatPermissionLabel,
