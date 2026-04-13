@@ -782,7 +782,7 @@ function buildRecordCreationCard({
     ...(createSecretFlow ? [
       {
         type: 'TextBlock',
-        text: '\uD83D\uDD12 End-to-end encrypted. Your data is protected by Keeper\u2019s zero-knowledge architecture.',
+        text: '\uD83D\uDD12 Auto-generate passwords to keep them fully private. Generated passwords stay in your Keeper Vault (zero-knowledge), while manually entered passwords pass through Teams.',
         wrap: true,
         isSubtle: true,
         size: 'Small',
