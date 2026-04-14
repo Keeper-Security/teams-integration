@@ -18,6 +18,7 @@ This document describes the installation of the Keeper Teams App using a streaml
 | **Folder Access Requests** | Request access to specific Keeper Shared Folders with justification, custom permissions and access time limits. |
 | **One-Time Share Requests** | Request for a one-time share, password reset or other dynamic password generation with a self-destructing share link. The one-time share can also be editable, offering bi-directional sharing capabilities. |
 | **Endpoint Privilege Manager Approvals** | Keeper Endpoint Privilege Manager (KEPM) just-in-time elevation approvals in realtime through a dedicated Teams channel. |
+| **Self-Service Secret Creation** | Create new login records directly from Teams into a shared folder in the Keeper vault, with subfolder selection and auto-generated passwords. |
 | **SSO Cloud Device Approvals** | Perform approvals of SSO Cloud devices directly through Teams, if the Keeper Automator service is not deployed. |
 
 ---
@@ -543,10 +544,10 @@ Create a new login record directly in your Keeper vault. The record is saved to 
 **Syntax:**
 
 ```
-keeper-create-secret ["<title>"] ["<notes>"]
+keeper-create-secret "<title>" ["<notes>"]
 ```
 
-Both title and notes are optional — if provided, they pre-fill the form. Wrap values in quotes if they contain spaces.
+Title is required. Notes are optional.
 
 **Examples:**
 

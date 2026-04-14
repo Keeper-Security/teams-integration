@@ -5,7 +5,7 @@
  * - keeper-request-record <name> <justification>
  * - keeper-request-folder <name> <justification>
  * - keeper-one-time-share <name> [justification]
- * - keeper-create-secret ["<title>"] [notes]  (optional; pre-fills title and notes on the form)
+ * - keeper-create-secret "<title>" [notes]  (title required; notes optional, pre-fills the form)
  * - help
  */
 

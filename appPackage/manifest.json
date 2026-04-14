@@ -50,7 +50,7 @@
                     },
                     {
                         "title": "keeper-create-secret",
-                        "description": "Create a new vault login record with a generated password. Usage: keeper-create-secret \"Title\" notes"
+                        "description": "Create a new vault login record in a shared folder. Usage: keeper-create-secret \"Title\" [notes]. Title is required, notes are optional."
                     },
                     {
                         "title": "help",
