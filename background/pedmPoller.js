@@ -27,6 +27,26 @@ function extractValue(str, prefix) {
 }
 
 /**
+ * Parse justification field — if JSON with a `text` field, extract it; otherwise return as-is.
+ */
+function parseJustification(raw) {
+  if (!raw) return '';
+  if (typeof raw !== 'string') {
+    if (raw.text) return String(raw.text);
+    return String(raw);
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.text) {
+      return String(parsed.text);
+    }
+  } catch {
+    // not JSON
+  }
+  return raw;
+}
+
+/**
  * Parse EPM request data from API response
  */
 function parseEpmRequest(data) {
@@ -69,7 +89,7 @@ function parseEpmRequest(data) {
     fileName: fileName || data.file_name || data.fileName || '',
     filePath: filePath || data.file_path || data.filePath || '',
     description: description || data.description || '',
-    justification: data.justification || '',
+    justification: parseJustification(data.justification),
     expireIn: data.expire_in || data.expireIn || 30,
     created: data.created || data.timestamp || '',
   };

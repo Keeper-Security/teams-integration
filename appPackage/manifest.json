@@ -1,7 +1,7 @@
 {
     "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.24/MicrosoftTeams.schema.json",
     "manifestVersion": "1.24",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "id": "${{TEAMS_APP_ID}}",
     "developer": {
         "name": "Keeper Security",
@@ -47,6 +47,10 @@
                     {
                         "title": "keeper-one-time-share",
                           "description": "Request a one-time share link. Usage: keeper-one-time-share \"Record UID or Description\" Justification message or ticket number"
+                    },
+                    {
+                        "title": "keeper-create-secret",
+                        "description": "Create a new vault login record in a shared folder. Usage: keeper-create-secret \"Title\" [notes]. Title is required, notes are optional."
                     },
                     {
                         "title": "help",

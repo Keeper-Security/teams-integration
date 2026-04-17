@@ -13,6 +13,7 @@ module.exports = {
   buildRecordConfirmationCard: approvalCard.buildRecordConfirmationCard,
   buildRecordSearchResultsCard: approvalCard.buildRecordSearchResultsCard,
   buildRecordCreationCard: approvalCard.buildRecordCreationCard,
+  buildCreateSecretSuccessCard: approvalCard.buildCreateSecretSuccessCard,
   buildRecordCreatedCard: approvalCard.buildRecordCreatedCard,
   buildRecordInvitationSentCard: approvalCard.buildRecordInvitationSentCard,
   buildRecordAlreadyHasAccessCard: approvalCard.buildRecordAlreadyHasAccessCard,

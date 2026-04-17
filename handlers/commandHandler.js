@@ -5,6 +5,7 @@
  * - keeper-request-record <name> <justification>
  * - keeper-request-folder <name> <justification>
  * - keeper-one-time-share <name> [justification]
+ * - keeper-create-secret "<title>" [notes]  (title required; notes optional, pre-fills the form)
  * - help
  */
 
@@ -636,6 +637,53 @@ async function handleStatus(context) {
 }
 
 /**
+ * Show the create-secret Adaptive Card (title, login, password, URL, notes; optional shared-folder target; no self-destruct).
+ * Optional message args pre-fill title and notes.
+ *
+ * @param {Object} context - Teams turn context
+ * @param {string} argsText - Optional: quoted title + optional notes for pre-fill
+ * @returns {Promise<void>}
+ */
+async function handleCreateSecret(context, argsText) {
+  const { uid: prefillTitle, justification: prefillNotes } = parseUidAndJustification(argsText || '');
+  const userInfo = await getUserInfo(context.activity);
+  const approvalId = generateApprovalId();
+
+  const {
+    choiceSetChoices: sharedFolderChoices,
+    error: sharedFoldersLoadError,
+    noSharedFoldersForUser,
+  } = await keeperClient.getSharedFolderChoicesForEmail(userInfo.userEmail);
+
+  const formCard = cards.buildRecordCreationCard({
+    approvalId,
+    requesterName: userInfo.userName,
+    requesterId: userInfo.teamsUserId,
+    requesterEmail: userInfo.userEmail,
+    requesterAadObjectId: context.activity.from?.aadObjectId,
+    justification: '',
+    identifier: '',
+    originalRecordTitle: '',
+    searchQuery: prefillTitle?.trim() || '',
+    createSecretFlow: true,
+    sharedFolderChoices,
+    sharedFoldersLoadError,
+    noSharedFoldersForUser,
+    selectedTargetFolderUid: '_default_',
+    recordTitle: prefillTitle?.trim() || '',
+    recordNotes: prefillNotes?.trim() || '',
+  });
+
+  await context.send({
+    type: 'message',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: formCard,
+    }],
+  });
+}
+
+/**
  * Route a command to the appropriate handler
  * @param {Object} context - Teams turn context
  * @param {string} text - Raw message text
@@ -689,6 +737,13 @@ async function routeCommand(context, text) {
     case 'st':
       await handleStatus(context);
       return true;
+
+    case 'keeper-create-secret':
+    case 'create-secret':
+    case 'createsecret':
+    case 'kcs':
+      await handleCreateSecret(context, argsText);
+      return true;
       
     default:
       return false;
@@ -703,6 +758,7 @@ module.exports = {
   handleSearch,
   handleHelp,
   handleStatus,
+  handleCreateSecret,
   parseCommand,
   parseUidAndJustification,
   generateApprovalId,

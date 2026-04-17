@@ -20,7 +20,7 @@ services:
       - "${COMMANDER_PORT:-8900}:8900"
     command: >
       service-create -p 8900
-      -c 'search, share-record, share-folder, record-add, one-time-share, pedm, device-approve, get'
+      -c 'search, share-record, share-folder, share-report, record-add, tree, one-time-share, pedm, device-approve, get'
       -f json -q y
       -ur ${KEEPER_USER_UID}
       --ksm-config ${KSM_CONFIG}

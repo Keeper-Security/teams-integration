@@ -16,6 +16,7 @@ module.exports = {
   handleSearch: commandHandler.handleSearch,
   handleHelp: commandHandler.handleHelp,
   handleStatus: commandHandler.handleStatus,
+  handleCreateSecret: commandHandler.handleCreateSecret,
   parseCommand: commandHandler.parseCommand,
   generateApprovalId: commandHandler.generateApprovalId,
   
