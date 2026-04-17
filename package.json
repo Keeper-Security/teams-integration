@@ -16,7 +16,7 @@
         "@keeper-security/secrets-manager-core": "^17.4.0",
         "@microsoft/teams.apps": "^2.0.0",
         "@microsoft/teams.common": "^2.0.0",
-        "axios": "^1.6.0",
+        "axios": "^1.15.0",
         "botbuilder": "^4.23.3",
         "dotenv": "^16.4.5"
     },
