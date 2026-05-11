@@ -277,6 +277,20 @@ function getCurrentTimestamp() {
   return new Date().toISOString().replace('T', ' ').substring(0, 19);
 }
 
+
+function sanitizeDisplayField(val) {
+  if (typeof val !== 'string') return val;
+  return val.replace(/[<>&"']/g, '');
+}
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+
+function isValidEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  return EMAIL_REGEX.test(email.trim());
+}
+
 module.exports = {
   DURATION_MAP,
   RECORD_PERMANENT_PERMISSIONS,
@@ -289,4 +303,6 @@ module.exports = {
   getApproverInfo,
   tryUpdateApprovalCard,
   getCurrentTimestamp,
+  sanitizeDisplayField,
+  isValidEmail,
 };
