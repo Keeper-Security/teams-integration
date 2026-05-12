@@ -1,6 +1,6 @@
 {
     "name": "keeper-teams-app",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Keeper Security app for Microsoft Teams - credential management and approval workflows",
     "author": "Keeper Security",
     "license": "MIT",
