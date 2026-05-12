@@ -903,8 +903,15 @@ class KeeperClient {
       const result = await this._executeCommandAsync(command, 20);
       
       if (!result || result.status !== 'success') {
-        const errorMsg = this._formatError(result?.message);
-        return { success: false, error: 'Failed to create record: ' + errorMsg };
+        const classified = this._classifyCreateRecordError(result);
+        return {
+          success: false,
+          error: classified.friendly,
+          errorCode: classified.code,
+          errorTitle: classified.title,
+          rawError: classified.raw,
+          httpStatus: result?.httpStatus,
+        };
       }
 
       const recordUid = result.data?.record_uid;
@@ -1415,6 +1422,50 @@ class KeeperClient {
     }
     
     return results;
+  }
+
+  _classifyCreateRecordError(result) {
+    const raw = String(result?.error || result?.message || '').trim();
+    const lower = raw.toLowerCase();
+
+    if (lower.includes('restricted by your enterprise role policy')) {
+      const m = raw.match(/record type "([^"]+)" is restricted/i);
+      const recordType = m ? m[1] : 'login';
+      return {
+        code: 'POLICY_RECORD_TYPE_RESTRICTED',
+        title: 'Record type not permitted',
+        friendly:
+          `Your administrator has restricted creation of "${recordType}" records ` +
+          `via the Keeper Admin Console role policy. Please contact your Keeper administrator.`,
+        raw,
+      };
+    }
+
+    if (
+      lower.includes('password must be at least') ||
+      lower.includes('password must contain at least')
+    ) {
+      const cleaned = raw
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((line) => line && !/^use --force/i.test(line));
+      const bulleted = cleaned.length
+        ? cleaned.map((line) => '• ' + line).join('\n')
+        : raw;
+      return {
+        code: 'POLICY_PASSWORD_COMPLEXITY',
+        title: "Password does not meet your organization's policy",
+        friendly: bulleted,
+        raw,
+      };
+    }
+
+    return {
+      code: 'GENERIC',
+      title: 'Record creation failed',
+      friendly: this._formatError(raw),
+      raw,
+    };
   }
 
   _formatError(message) {

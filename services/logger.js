@@ -22,18 +22,38 @@ function getTimestamp() {
   return new Date().toISOString();
 }
 
+
+function sanitizeLogString(value) {
+  if (typeof value !== 'string') return value;
+  return value.replace(/[\r\n\x00-\x1f\x7f]/g, ' ');
+}
+
+
+function sanitizeMeta(meta) {
+  if (meta === null || meta === undefined) return meta;
+  if (typeof meta === 'string') return sanitizeLogString(meta);
+  if (typeof meta === 'object') {
+    const sanitized = {};
+    for (const [k, v] of Object.entries(meta)) {
+      sanitized[k] = typeof v === 'string' ? sanitizeLogString(v) : v;
+    }
+    return sanitized;
+  }
+  return meta;
+}
+
 /**
  * Format log message with context
  */
 function formatMessage(level, context, message, meta) {
   const ts = getTimestamp();
   const prefix = context ? `[${context}]` : '';
-  let output = `${ts} [${level.toUpperCase()}] ${prefix} ${message}`;
+  let output = `${ts} [${level.toUpperCase()}] ${prefix} ${sanitizeLogString(message)}`;
   
   if (meta !== undefined && meta !== null) {
     if (typeof meta === 'object') {
       try {
-        const metaStr = JSON.stringify(meta);
+        const metaStr = JSON.stringify(sanitizeMeta(meta));
         if (metaStr !== '{}') {
           output += ' ' + metaStr;
         }
@@ -41,7 +61,7 @@ function formatMessage(level, context, message, meta) {
         output += ' [Object]';
       }
     } else {
-      output += ' ' + meta;
+      output += ' ' + sanitizeLogString(String(meta));
     }
   }
   
