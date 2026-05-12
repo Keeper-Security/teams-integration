@@ -7,6 +7,7 @@
 const keeperClient = require('../../services/keeperClient');
 const cards = require('../../cards');
 const { getApprovalStatus, createLogger } = require('../../services');
+const { sanitizeDisplayField, isValidEmail } = require('./helpers');
 
 const log = createLogger('CardActions');
 
@@ -86,16 +87,29 @@ async function handleInlineLookup(verb, data, searchQuery) {
   const isShare = verb === 'lookup_share';
   const {
     approvalId,
-    identifier,
-    recordTitle,
-    folderName,
+    identifier: rawIdentifier,
+    recordTitle: rawRecordTitle,
+    folderName: rawFolderName,
     requesterId,
     requesterEmail,
     requesterAadObjectId,
-    requesterName,
-    justification,
+    requesterName: rawRequesterName,
+    justification: rawJustification,
   } = data;
-  
+
+  if (requesterEmail && !isValidEmail(requesterEmail)) {
+    log.warn('Invalid requesterEmail format rejected in lookup action', { approvalId });
+    return null;
+  }
+
+  // Sanitize display-only fields so injected payloads cannot be
+  // reflected back into card data with dangerous HTML characters.
+  const requesterName = sanitizeDisplayField(rawRequesterName);
+  const justification = sanitizeDisplayField(rawJustification);
+  const recordTitle   = sanitizeDisplayField(rawRecordTitle);
+  const folderName    = sanitizeDisplayField(rawFolderName);
+  const identifier    = sanitizeDisplayField(rawIdentifier);
+
   const query = searchQuery || identifier || (isFolder ? folderName : recordTitle) || '';
   
   const lookupType = isFolder ? 'folder' : (isShare ? 'share' : 'record');
@@ -439,8 +453,18 @@ async function handleSubmitCreateRecord(data, formData) {
     justification,
   } = data;
   
-  const { recordTitle, recordLogin, recordPassword, recordUrl, recordNotes } = formData;
-  
+  const {
+    recordTitle: rawRecordTitle,
+    recordLogin: rawRecordLogin,
+    recordPassword,
+    recordUrl: rawRecordUrl,
+    recordNotes,
+  } = formData;
+
+  const recordTitle = (rawRecordTitle || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+  const recordLogin = (rawRecordLogin || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+  const recordUrl = (rawRecordUrl || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+
   log.debug('Creating record', { title: recordTitle, approvalId });
   
   if (!recordTitle || !recordTitle.trim()) {
@@ -472,7 +496,32 @@ async function handleSubmitCreateRecord(data, formData) {
       error: 'Login is required',
     });
   }
-  
+
+  const trimmedUrl = recordUrl?.trim() || '';
+  if (trimmedUrl) {
+    let urlValid = false;
+    try {
+      const parsed = new URL(trimmedUrl);
+      urlValid = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      urlValid = false;
+    }
+    if (!urlValid) {
+      return cards.buildRecordCreationCard({
+        approvalId,
+        requesterName,
+        requesterId,
+        requesterEmail,
+        requesterAadObjectId,
+        justification,
+        identifier,
+        originalRecordTitle,
+        searchQuery: recordTitle,
+        error: 'URL must start with http:// or https://',
+      });
+    }
+  }
+
   const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
   const passwordToUse = generatePassword ? '$GEN' : recordPassword;
   
@@ -486,31 +535,37 @@ async function handleSubmitCreateRecord(data, formData) {
   });
   
   if (!result.success) {
-    log.error('Failed to create record', result.error);
-    return {
-      type: 'AdaptiveCard',
-      '$schema': 'https://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.5',
-      body: [
-        { type: 'TextBlock', text: 'Record Creation Failed', weight: 'Bolder', size: 'Large', color: 'Attention' },
-        { type: 'TextBlock', text: `Error: ${result.error || 'Unknown error'}`, wrap: true },
-        { type: 'TextBlock', text: 'Please try again or contact support.', wrap: true, isSubtle: true },
-      ],
-      actions: [
-        {
-          type: 'Action.Execute',
-          title: 'Try Again',
-          verb: 'show_create_form',
-          data: { action: 'show_create_form', approvalId: approvalId || '', identifier: identifier || '', recordTitle: originalRecordTitle || '', requesterId: requesterId || '', requesterEmail: requesterEmail || '', requesterAadObjectId: requesterAadObjectId || '', requesterName: requesterName || '', justification: justification || '' },
-        },
-        {
-          type: 'Action.Execute',
-          title: 'Cancel',
-          verb: 'cancel_create_form',
-          data: { action: 'cancel_create_form', approvalId: approvalId || '', identifier: identifier || '', recordTitle: originalRecordTitle || '', requesterId: requesterId || '', requesterEmail: requesterEmail || '', requesterAadObjectId: requesterAadObjectId || '', requesterName: requesterName || '', justification: justification || '' },
-        },
-      ],
-    };
+    log.error('Failed to create record', { error: result.error, errorCode: result.errorCode });
+
+    // Re-render the same form with a friendly inline error so the user keeps
+    // their typed values and can fix the offending field in-place.
+    // On password-complexity failures, blank the password input so the user
+    // re-enters or leaves it empty to use the auto-generator ($GEN).
+    const isPasswordPolicyError = result.errorCode === 'POLICY_PASSWORD_COMPLEXITY';
+    const errorTitle = result.errorTitle || 'Record creation failed';
+    const errorBody = result.error || 'Unknown error';
+    const tip = isPasswordPolicyError
+      ? '\n\nTip: leave the password empty or use the auto-generate option to get a Keeper-compliant password.'
+      : '';
+
+    return cards.buildRecordCreationCard({
+      approvalId,
+      requesterName,
+      requesterId,
+      requesterEmail,
+      requesterAadObjectId,
+      justification,
+      identifier,
+      originalRecordTitle,
+      searchQuery: recordTitle,
+      createSecretFlow: false,
+      recordTitle,
+      recordLogin,
+      recordPassword: isPasswordPolicyError ? '' : recordPassword,
+      recordUrl,
+      recordNotes,
+      error: `${errorTitle}\n${errorBody}${tip}`,
+    });
   }
   
   log.debug('Record created successfully', result.recordUid);

@@ -372,10 +372,10 @@ app.on("invoke", async (context) => {
           merged.createSecretFlow === true ||
           merged.createSecretFlow === 'true';
 
-        const recordTitle = merged.recordTitle || '';
-        const recordLogin = merged.recordLogin || '';
+        const recordTitle = (merged.recordTitle || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordLogin = (merged.recordLogin || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
         const recordPassword = merged.recordPassword || '';
-        const recordUrl = merged.recordUrl || '';
+        const recordUrl = (merged.recordUrl || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
         const recordNotes = merged.recordNotes || '';
         const targetFolderUidRaw = merged.targetFolderUid;
 
@@ -391,7 +391,7 @@ app.on("invoke", async (context) => {
 
         const cards = require('./cards');
 
-        const buildApprovalValidationCard = (errorMessage) =>
+        const buildApprovalValidationCard = (errorMessage, opts = {}) =>
           cards.buildRecordCreationCard({
             approvalId: merged.approvalId,
             requesterName: merged.requesterName,
@@ -406,7 +406,7 @@ app.on("invoke", async (context) => {
             error: errorMessage,
             recordTitle,
             recordLogin,
-            recordPassword,
+            recordPassword: opts.clearPassword ? '' : recordPassword,
             recordUrl,
             recordNotes,
           });
@@ -419,7 +419,7 @@ app.on("invoke", async (context) => {
           return '_default_';
         };
 
-        const buildCreateSecretCardFromFolderResult = (folderResult, errorMessage) => {
+        const buildCreateSecretCardFromFolderResult = (folderResult, errorMessage, opts = {}) => {
           const choiceSetChoices = folderResult.choiceSetChoices;
           const sharedFoldersLoadError = folderResult.error;
           const noSharedFoldersForUser = !!folderResult.noSharedFoldersForUser;
@@ -442,16 +442,27 @@ app.on("invoke", async (context) => {
             ...(errorMessage ? { error: errorMessage } : {}),
             recordTitle,
             recordLogin,
-            recordPassword,
+            recordPassword: opts.clearPassword ? '' : recordPassword,
             recordUrl,
             recordNotes,
           });
         };
 
-        const buildCreateSecretValidationCard = async (errorMessage) => {
+        const buildCreateSecretValidationCard = async (errorMessage, opts = {}) => {
           const keeperClient = require('./services/keeperClient');
           const folderResult = await keeperClient.getSharedFolderChoicesForEmail(merged.requesterEmail || '');
-          return buildCreateSecretCardFromFolderResult(folderResult, errorMessage);
+          return buildCreateSecretCardFromFolderResult(folderResult, errorMessage, opts);
+        };
+
+        const isValidRecordUrl = (url) => {
+          const trimmed = (url || '').trim();
+          if (!trimmed) return true;
+          try {
+            const parsed = new URL(trimmed);
+            return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+          } catch {
+            return false;
+          }
         };
 
         if (isCreateSecretFlow) {
@@ -459,6 +470,7 @@ app.on("invoke", async (context) => {
           const validationErrors = [];
           if (!folderSelected) validationErrors.push('Shared folder selection is required');
           if (!recordTitle?.trim()) validationErrors.push('Title is required');
+          if (!isValidRecordUrl(recordUrl)) validationErrors.push('URL must start with http:// or https://');
           if (validationErrors.length > 0) {
             const errorMessage = validationErrors.join('. ');
             log.debug(`Validation failed: ${errorMessage}`);
@@ -468,17 +480,20 @@ app.on("invoke", async (context) => {
               value: await buildCreateSecretValidationCard(errorMessage),
             };
           }
-        } else if (!recordTitle?.trim() || !recordLogin?.trim()) {
+        } else {
           const errors = [];
           if (!recordTitle?.trim()) errors.push('Title is required');
           if (!recordLogin?.trim()) errors.push('Login is required');
-          const errorMessage = errors.join('. ');
-          log.debug(`Validation failed: ${errorMessage}`);
-          return {
-            statusCode: 200,
-            type: 'application/vnd.microsoft.card.adaptive',
-            value: buildApprovalValidationCard(errorMessage),
-          };
+          if (!isValidRecordUrl(recordUrl)) errors.push('URL must start with http:// or https://');
+          if (errors.length > 0) {
+            const errorMessage = errors.join('. ');
+            log.debug(`Validation failed: ${errorMessage}`);
+            return {
+              statusCode: 200,
+              type: 'application/vnd.microsoft.card.adaptive',
+              value: buildApprovalValidationCard(errorMessage),
+            };
+          }
         }
 
         if (isCreateSecretFlow) {
@@ -549,181 +564,143 @@ app.on("invoke", async (context) => {
             };
           }
 
+          const isPwdPolicy = result.errorCode === 'POLICY_PASSWORD_COMPLEXITY';
+          const tip = isPwdPolicy
+            ? '\n\nTip: leave the password empty or use the auto-generate option to get a Keeper-compliant password.'
+            : '';
+          const errorTitle = result.errorTitle || 'Record creation failed';
+          const errorMessage = `${errorTitle}\n${result.error || 'Failed to create record'}${tip}`;
+
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
-            value: await buildCreateSecretValidationCard(result.error || 'Failed to create record'),
+            value: await buildCreateSecretValidationCard(errorMessage, { clearPassword: isPwdPolicy }),
           };
         }
 
-        // --- Approval-channel create flow (unchanged): async + proactive message to approvals ---
+        // --- Approval-channel create flow ---
+        // Synchronous await of the create call so policy/validation failures can be
+        // surfaced inline in the same form card (the user keeps all typed values).
+        // Mirrors the self-service Create Secret flow's behaviour.
         const approvalPayload = merged;
+        const keeperClientForCreate = require('./services/keeperClient');
+        const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
 
-        // Store context for proactive messaging
-        const conversationRef = {
-          serviceUrl: activity.serviceUrl,
-          channelId: activity.channelId,
-          conversation: activity.conversation,
+        const result = await keeperClientForCreate.createRecord({
+          title: recordTitle.trim(),
+          login: recordLogin.trim(),
+          password: generatePassword ? '$GEN' : recordPassword,
+          url: recordUrl?.trim() || null,
+          notes: recordNotes?.trim() || null,
+          generatePassword: generatePassword,
+          selfDestructDuration: selfDestructDuration,
+        });
+
+        log.debug('Approval-flow record creation complete', result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
+
+        if (!result.success) {
+          const isPwdPolicy = result.errorCode === 'POLICY_PASSWORD_COMPLEXITY';
+          const tip = isPwdPolicy
+            ? '\n\nTip: leave the password empty or use the auto-generate option to get a Keeper-compliant password.'
+            : '';
+          const errorTitle = result.errorTitle || 'Record creation failed';
+          const errorMessage = `${errorTitle}\n${result.error || 'Unknown error'}${tip}`;
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: buildApprovalValidationCard(errorMessage, {
+              clearPassword: isPwdPolicy,
+            }),
+          };
+        }
+
+        // Success path: build the approval card with permission/duration selectors
+        // and return it inline as the response (replaces the form card in chat).
+        const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('./cards/constants');
+
+        const successBodyElements = [
+          { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
+          { type: 'TextBlock', text: `Requester: ${approvalPayload.requesterName || 'Unknown'}`, wrap: true },
+          { type: 'TextBlock', text: `Justification: ${approvalPayload.justification || 'N/A'}`, wrap: true, isSubtle: true },
+          {
+            type: 'Container',
+            style: 'good',
+            spacing: 'Medium',
+            items: [
+              { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
+              { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
+            ],
+          },
+        ];
+
+        if (selfDestructEnabled) {
+          const durationLabels = { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days' };
+          const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
+          successBodyElements.push({
+            type: 'Container',
+            style: 'attention',
+            spacing: 'Medium',
+            items: [
+              { type: 'TextBlock', text: 'Self-Destruct Enabled', weight: 'Bolder', wrap: true },
+              { type: 'TextBlock', text: `This record will auto-delete after ${durationLabel}`, size: 'Small', wrap: true },
+            ],
+          });
+        }
+
+        successBodyElements.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
+        );
+
+        const successCard = {
+          type: 'AdaptiveCard',
+          '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+          version: '1.5',
+          body: successBodyElements,
+          actions: [
+            {
+              type: 'Action.Execute',
+              title: 'Approve',
+              style: 'positive',
+              verb: 'approve_record',
+              data: {
+                action: 'approve_record',
+                approvalId: approvalPayload.approvalId || '',
+                recordUid: result.recordUid,
+                recordTitle: recordTitle.trim(),
+                requesterId: approvalPayload.requesterId || '',
+                requesterEmail: approvalPayload.requesterEmail || '',
+                requesterName: approvalPayload.requesterName || '',
+                justification: approvalPayload.justification || '',
+                selfDestruct: selfDestructEnabled,
+                selfDestructDuration: selfDestructDuration,
+              },
+            },
+            {
+              type: 'Action.Execute',
+              title: 'Deny',
+              style: 'destructive',
+              verb: 'deny_record',
+              data: {
+                action: 'deny_record',
+                approvalId: approvalPayload.approvalId || '',
+                recordUid: result.recordUid,
+                recordTitle: recordTitle.trim(),
+                requesterId: approvalPayload.requesterId || '',
+                requesterEmail: approvalPayload.requesterEmail || '',
+                requesterName: approvalPayload.requesterName || '',
+                justification: approvalPayload.justification || '',
+              },
+            },
+          ],
         };
-        const activityId = activity.replyToId || activity.id;
-        
-        // Fire off async record creation (don't await)
-        // Use channelService for proactive messaging since context won't be available later
-        const channelService = getChannelService();
-        
-        (async () => {
-          try {
-            log.debug(`Background: Starting record creation${selfDestructEnabled ? ` (self-destruct: ${selfDestructDuration})` : ''}`);
-            const keeperClient = require('./services/keeperClient');
-            const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
-            
-            const result = await keeperClient.createRecord({
-              title: recordTitle.trim(),
-              login: recordLogin.trim(),
-              password: generatePassword ? '$GEN' : recordPassword,
-              url: recordUrl?.trim() || null,
-              notes: recordNotes?.trim() || null,
-              generatePassword: generatePassword,
-              selfDestructDuration: selfDestructDuration,
-            });
-            
-            log.debug('Background: Record creation complete', result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
-            
-            // Build the result card with permission and duration dropdowns
-            const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('./cards/constants');
-            
-            let resultCard;
-            if (result.success) {
-              // Build body elements
-              const bodyElements = [
-                { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
-                { type: 'TextBlock', text: `Requester: ${approvalPayload.requesterName || 'Unknown'}`, wrap: true },
-                { type: 'TextBlock', text: `Justification: ${approvalPayload.justification || 'N/A'}`, wrap: true, isSubtle: true },
-                { 
-                  type: 'Container', 
-                  style: 'good', 
-                  spacing: 'Medium',
-                  items: [
-                    { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
-                    { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
-                  ]
-                },
-              ];
-              
-              // Add self-destruct notice if enabled
-              if (selfDestructEnabled) {
-                const durationLabels = { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days' };
-                const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
-                bodyElements.push({
-                  type: 'Container',
-                  style: 'attention',
-                  spacing: 'Medium',
-                  items: [
-                    { type: 'TextBlock', text: 'Self-Destruct Enabled', weight: 'Bolder', wrap: true },
-                    { type: 'TextBlock', text: `This record will auto-delete after ${durationLabel}`, size: 'Small', wrap: true },
-                  ]
-                });
-              }
-              
-              // Add permission/duration selectors
-              bodyElements.push(
-                { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-                { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-                { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-                { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
-              );
-              
-              resultCard = {
-                type: 'AdaptiveCard',
-                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-                version: '1.5',
-                body: bodyElements,
-                actions: [
-                  {
-                    type: 'Action.Execute',
-                    title: 'Approve',
-                    style: 'positive',
-                    verb: 'approve_record',
-                    data: { 
-                      action: 'approve_record', 
-                      approvalId: approvalPayload.approvalId || '', 
-                      recordUid: result.recordUid, 
-                      recordTitle: recordTitle.trim(), 
-                      requesterId: approvalPayload.requesterId || '', 
-                      requesterEmail: approvalPayload.requesterEmail || '', 
-                      requesterName: approvalPayload.requesterName || '', 
-                      justification: approvalPayload.justification || '',
-                      selfDestruct: selfDestructEnabled,
-                      selfDestructDuration: selfDestructDuration,
-                    },
-                  },
-                  {
-                    type: 'Action.Execute',
-                    title: 'Deny',
-                    style: 'destructive',
-                    verb: 'deny_record',
-                    data: { 
-                      action: 'deny_record', 
-                      approvalId: approvalPayload.approvalId || '', 
-                      recordUid: result.recordUid, 
-                      recordTitle: recordTitle.trim(), 
-                      requesterId: approvalPayload.requesterId || '', 
-                      requesterEmail: approvalPayload.requesterEmail || '', 
-                      requesterName: approvalPayload.requesterName || '', 
-                      justification: approvalPayload.justification || '',
-                    },
-                  },
-                ],
-              };
-            } else {
-              resultCard = {
-                type: 'AdaptiveCard',
-                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-                version: '1.5',
-                body: [
-                  { type: 'TextBlock', text: 'Error Creating Record', weight: 'Bolder', size: 'Large', color: 'Attention' },
-                  { type: 'TextBlock', text: result.error || 'Unknown error occurred', wrap: true },
-                ],
-                actions: [
-                  { type: 'Action.Execute', title: 'Try Again', verb: 'show_create_form', data: approvalPayload },
-                ],
-              };
-            }
-            
-            if (channelService && channelService.isApprovalsChannelReady()) {
-              try {
-                const sent = await channelService.sendApprovalCardViaConnector(
-                  resultCard, 
-                  approvalPayload.approvalId || 'create-record',
-                  result.success ? `Record "${recordTitle.trim()}" created successfully!` : null
-                );
-                log.debug('Background: Sent result card via channelService', sent.success);
-              } catch (sendError) {
-                log.error('Background: Error sending via channelService', sendError.message);
-              }
-            } else {
-              log.error('Background: ChannelService not available for proactive messaging');
-            }
-          } catch (bgError) {
-            log.error('Background: Error in record creation', bgError.message);
-          }
-        })();
-        
-        log.debug('Returning processing card immediately');
+
         return {
           statusCode: 200,
           type: 'application/vnd.microsoft.card.adaptive',
-          value: {
-            type: 'AdaptiveCard',
-            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            version: '1.5',
-            body: [
-              { type: 'TextBlock', text: 'Creating Record...', weight: 'Bolder', size: 'Large' },
-              { type: 'TextBlock', text: `Title: ${recordTitle.trim()}`, wrap: true },
-              { type: 'TextBlock', text: 'Please wait. The result will appear below shortly.', wrap: true, isSubtle: true },
-            ],
-            actions: [],
-          },
+          value: successCard,
         };
       } catch (error) {
         log.error('Error handling submit_create_record', { message: error.message, stack: error.stack });

@@ -17,6 +17,8 @@ const {
   tryUpdateApprovalCard,
   buildInvitationNotificationCard,
   getCurrentTimestamp,
+  sanitizeDisplayField,
+  isValidEmail,
 } = require('./helpers');
 const { handleRecordApproval, handleRecordDenial } = require('./recordHandler');
 const { handleFolderApproval, handleFolderDenial } = require('./folderHandler');
@@ -143,7 +145,9 @@ async function routeApprovalActionWithCardResponse(context, data) {
 }
 
 async function handleRecordApprovalWithCardResponse(context, data, approver) {
-  const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
+  const { approvalId, recordUid, requesterId, requesterEmail } = data;
+  const recordTitle   = sanitizeDisplayField(data.recordTitle);
+  const requesterName = sanitizeDisplayField(data.requesterName);
   const permission = data.permission || 'view_only';
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration);
@@ -156,9 +160,9 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     return { error: 'Missing record UID' };
   }
   
-  if (!requesterEmail) {
-    log.error('Missing requester email');
-    return { error: 'Missing requester email' };
+  if (!requesterEmail || !isValidEmail(requesterEmail)) {
+    log.error('Missing or invalid requester email');
+    return { error: 'Missing or invalid requester email' };
   }
   
   // Build and return the "Processing" card immediately to avoid Teams timeout
@@ -393,7 +397,9 @@ async function processRecordGrantAsync(context, data, approver, params) {
 }
 
 async function handleFolderApprovalWithCardResponse(context, data, approver) {
-  const { approvalId, folderUid, folderName, requesterName, requesterId, requesterEmail } = data;
+  const { approvalId, folderUid, requesterId, requesterEmail } = data;
+  const folderName    = sanitizeDisplayField(data.folderName);
+  const requesterName = sanitizeDisplayField(data.requesterName);
   const permission = data.permission || 'no_permissions';
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration);
@@ -406,9 +412,9 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     return { error: 'Missing folder UID' };
   }
   
-  if (!requesterEmail) {
-    log.error('Missing requester email');
-    return { error: 'Missing requester email' };
+  if (!requesterEmail || !isValidEmail(requesterEmail)) {
+    log.error('Missing or invalid requester email');
+    return { error: 'Missing or invalid requester email' };
   }
   
   // Build and return the "Processing" card immediately to avoid Teams timeout
@@ -790,7 +796,9 @@ async function handleFolderDenialWithCardResponse(context, data, approver) {
 }
 
 async function handleShareApprovalWithCardResponse(context, data, approver) {
-  const { approvalId, recordUid, recordTitle, requesterName, requesterId, requesterEmail } = data;
+  const { approvalId, recordUid, requesterId, requesterEmail } = data;
+  const recordTitle   = sanitizeDisplayField(data.recordTitle);
+  const requesterName = sanitizeDisplayField(data.requesterName);
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration) || 86400;
   const editable = data.editable === 'true' || data.editable === true;
@@ -801,6 +809,11 @@ async function handleShareApprovalWithCardResponse(context, data, approver) {
   if (!recordUid) {
     log.error('Missing record UID for share');
     return { error: 'Missing record UID' };
+  }
+
+  if (requesterEmail && !isValidEmail(requesterEmail)) {
+    log.warn('Invalid requesterEmail format rejected in share approval', { approvalId });
+    return { error: 'Invalid requester email format' };
   }
   
   const result = await keeperClient.createOneTimeShare(
