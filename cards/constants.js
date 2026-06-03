@@ -28,6 +28,9 @@ const FOLDER_PERMISSIONS = [
  * Duration options for time-limited access
  */
 const DURATION_OPTIONS = [
+  { title: '5 minutes', value: '5m' },
+  { title: '10 minutes', value: '10m' },
+  { title: '30 minutes', value: '30m' },
   { title: '1 hour', value: '1h' },
   { title: '4 hours', value: '4h' },
   { title: '8 hours', value: '8h' },
@@ -38,9 +41,18 @@ const DURATION_OPTIONS = [
 ];
 
 /**
+ * Duration options excluding Permanent (used for PAM User targets where
+ * rotate-on-expire is incompatible with permanent access)
+ */
+const DURATION_OPTIONS_NO_PERMANENT = DURATION_OPTIONS.filter(o => o.value !== 'permanent');
+
+/**
  * Share duration options (subset for one-time shares)
  */
 const SHARE_DURATION_OPTIONS = [
+  { title: '5 minutes', value: '5m' },
+  { title: '10 minutes', value: '10m' },
+  { title: '30 minutes', value: '30m' },
   { title: '1 hour', value: '1h' },
   { title: '4 hours', value: '4h' },
   { title: '24 hours', value: '24h' },
@@ -67,6 +79,7 @@ module.exports = {
   RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS,
   DURATION_OPTIONS,
+  DURATION_OPTIONS_NO_PERMANENT,
   SHARE_DURATION_OPTIONS,
   SELF_DESTRUCT_DURATION_OPTIONS,
   DEFAULT_DURATION,

@@ -867,6 +867,10 @@ app.on("invoke", async (context) => {
           return { statusCode: 400, body: 'Invalid record selection' };
         }
         
+        const rotateOnExpire = activity.value?.action?.data?.rotateOnExpire || 
+                              activity.value?.data?.rotateOnExpire ||
+                              data.rotateOnExpire;
+
         log.debug('Approving selected record', selectedRecord);
         
         // Build the data for approval
@@ -877,6 +881,7 @@ app.on("invoke", async (context) => {
           recordTitle: selectedRecord.title,
           permission,
           duration,
+          rotateOnExpire,
         };
         
         // Call the existing approval handler
@@ -940,6 +945,10 @@ app.on("invoke", async (context) => {
           return { statusCode: 400, body: 'Invalid folder selection' };
         }
         
+        const rotateOnExpire = activity.value?.action?.data?.rotateOnExpire || 
+                              activity.value?.data?.rotateOnExpire ||
+                              data.rotateOnExpire;
+
         log.debug('Approving selected folder', selectedFolder);
         
         // Build the data for approval
@@ -950,6 +959,7 @@ app.on("invoke", async (context) => {
           folderName: selectedFolder.name,
           permission,
           duration,
+          rotateOnExpire,
         };
         
         // Call the existing approval handler

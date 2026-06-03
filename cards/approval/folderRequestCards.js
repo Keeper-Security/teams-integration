@@ -3,7 +3,7 @@
  * Cards for folder access requests, search results, and confirmations
  */
 
-const { FOLDER_PERMISSIONS, DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { FOLDER_PERMISSIONS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, DEFAULT_DURATION } = require('../constants');
 const { 
   buildSearchCardHeader, 
   buildNoResultsSection, 
@@ -28,6 +28,8 @@ function buildFolderApprovalCard({
   justification,
   isUid = true,
   identifier,
+  isPamFolder = false,
+  errorBanner,
 }) {
   const requestedTime = getCurrentTimestamp();
   
@@ -40,6 +42,15 @@ function buildFolderApprovalCard({
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
     body: [
+      ...(errorBanner ? [{
+        type: 'Container',
+        style: 'attention',
+        bleed: true,
+        spacing: 'None',
+        items: [
+          { type: 'TextBlock', text: `⚠ ${errorBanner}`, wrap: true, weight: 'Bolder', color: 'Attention' },
+        ],
+      }] : []),
       { type: 'TextBlock', text: 'Folder Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
         type: 'ColumnSet',
@@ -110,13 +121,22 @@ function buildFolderApprovalCard({
     }
     
     // Permission/duration selectors
+    const durationChoices = isPamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
     card.body.push(
       { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: DURATION_OPTIONS },
+      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
       { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
     );
+
+    if (isPamFolder) {
+      card.body.push(
+        { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+        { type: 'TextBlock', text: 'If rotation is configured on the underlying records, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+      );
+    }
     
     card.actions = [
       {
@@ -124,7 +144,7 @@ function buildFolderApprovalCard({
         title: 'Approve',
         style: 'positive',
         verb: 'approve_folder',
-        data: { action: 'approve_folder', approvalId, folderUid, folderName, requesterId, requesterEmail, requesterName },
+        data: { action: 'approve_folder', approvalId, folderUid, folderName, requesterId, requesterEmail, requesterName, isPamFolder },
       },
       {
         type: 'Action.Execute',
@@ -178,6 +198,7 @@ function buildFolderSearchResultsCard({
   foundFolders,
   noResults = false,
   originalFolderName,
+  isPamFolder = false,
 }) {
   const headerElements = buildSearchCardHeader('Folder Access Request', requesterName, approvalId, justification);
   
@@ -206,34 +227,52 @@ function buildFolderSearchResultsCard({
     
     if (folderCount === 1) {
       const folder = foundFolders[0];
+      const durationChoices = isPamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
       card.body.push(
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
         { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
+
+      if (isPamFolder) {
+        card.body.push(
+          { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+          { type: 'TextBlock', text: 'If rotation is configured on the underlying records, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+        );
+      }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_folder', data: { action: 'approve_folder', approvalId, folderUid: folder.uid, folderName: folder.name, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_folder', data: { action: 'approve_folder', approvalId, folderUid: folder.uid, folderName: folder.name, requesterId, requesterEmail, requesterName, justification, isPamFolder } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_folder_card', data: { action: 'reset_folder_card', ...baseData, folderName: originalFolderName } },
         { type: 'Action.Execute', title: 'Deny', style: 'destructive', verb: 'deny_folder', data: { action: 'deny_folder', approvalId, folderUid: folder.uid, folderName: folder.name, requesterId, requesterEmail, requesterName, justification } },
       ];
     } else {
       const folderChoices = foundFolders.map(f => ({ title: `${f.name} (${f.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: f.uid, name: f.name }) }));
       
+      const durationChoices = isPamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
       card.body.push(
         { type: 'TextBlock', text: 'Select Folder', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'selectedFolder', value: folderChoices[0].value, choices: folderChoices, style: 'expanded' },
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
         { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
+
+      if (isPamFolder) {
+        card.body.push(
+          { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+          { type: 'TextBlock', text: 'If rotation is configured on the underlying records, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+        );
+      }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_folder', data: { action: 'approve_selected_folder', approvalId, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_folder', data: { action: 'approve_selected_folder', approvalId, requesterId, requesterEmail, requesterName, justification, isPamFolder } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_folder_card', data: { action: 'reset_folder_card', ...baseData, folderName: originalFolderName } },
         { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_folder', data: { action: 'deny_folder', approvalId, folderUid: null, folderName: originalFolderName, requesterId, requesterEmail, requesterName, justification } },
       ];
@@ -259,6 +298,7 @@ function buildFolderApprovalCardWithStatus({
   duration,
   expiresAt,
   processedTime,
+  rotateOnExpire = false,
 }) {
   let statusText;
   let containerStyle;
@@ -368,6 +408,16 @@ function buildFolderApprovalCardWithStatus({
         columns: [
           { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Expires:', weight: 'Bolder', size: 'Small' }] },
           { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: expiresAt, size: 'Small' }] },
+        ],
+      });
+    }
+
+    if (rotateOnExpire) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Credential Rotation:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: 'Enabled on expiry', size: 'Small', color: 'Good' }] },
         ],
       });
     }

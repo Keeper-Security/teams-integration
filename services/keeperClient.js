@@ -395,8 +395,31 @@ class KeeperClient {
     return labels[permission] || permission;
   }
 
-  async grantRecordAccess(recordUid, userEmail, permission, durationSeconds = 86400) {
+  async isPamUserFolder(folderUid) {
+    if (!folderUid) return false;
     try {
+      const command = 'list-sf ' + shellEscapeSearch(folderUid) + ' --roe-eligible --format=json';
+      const result = await this._executeCommandAsync(command, 10);
+      if (!result || result.status !== 'success') {
+        log.debug('list-sf --roe-eligible non-success for folder', folderUid);
+        return false;
+      }
+      const data = result.data;
+      if (Array.isArray(data) && data.length > 0) {
+        log.debug('Folder is rotate-on-expire eligible', { folderUid, entries: data.length });
+        return true;
+      }
+      return false;
+    } catch (error) {
+      log.error('Exception in isPamUserFolder', { folderUid, error: error.message });
+      return false;
+    }
+  }
+
+  async grantRecordAccess(recordUid, userEmail, permission, durationSeconds = 86400, rotateOnExpire = false) {
+    try {
+      try { await this._executeCommandAsync('sync-down', 15); } catch (e) { log.warn('sync-down before share-record failed, proceeding', e.message); }
+
       // Check if the user is the record owner (cannot modify owner's permissions)
       // This is the only pre-check needed - aligns with Slack app implementation
       const recordOwner = await this.getRecordOwner(recordUid);
@@ -454,6 +477,9 @@ class KeeperClient {
         command += ' --expire-in ' + expireIn;
         const expiresAt = new Date(Date.now() + durationSeconds * 1000);
         expiresAtStr = expiresAt.toISOString();
+        if (rotateOnExpire) {
+          command += ' --rotate-on-expiration';
+        }
       }
       
       command += ' --force';
@@ -479,12 +505,14 @@ class KeeperClient {
             log.info('Share succeeded on retry attempt ' + (shareAttempt + 1), { recordUid });
           }
           
+          const pamRotateScheduled = !!(rotateOnExpire && !isPermanent && durationSeconds);
           return {
             success: true,
             expiresAt: expiresAtStr,
             permission: permission,
             duration: isPermanent ? 'permanent' : 'temporary',
             invitationSent: invitationSent,
+            rotateOnExpire: pamRotateScheduled,
           };
         }
         
@@ -505,6 +533,20 @@ class KeeperClient {
           };
         }
         
+        // Detect rotation-not-configured error (non-retryable)
+        const errLower = errorMsg.toLowerCase();
+        if (
+          errLower.includes('rotation must be already set') ||
+          (errLower.includes('rotate') && errLower.includes('expiration') && errLower.includes('set on the record')) ||
+          (errLower.includes('--rotate-on-expiration') && (errLower.includes('requires') || errLower.includes('ineligible')))
+        ) {
+          return {
+            success: false,
+            errorCode: 'pam_rotation_not_configured',
+            error: 'Rotation is not configured on this PAM User record.\n\nSet up rotation (Gateway + rotation settings) on the record in the Keeper Vault first, or uncheck "Rotate credentials when access expires" and approve again.',
+          };
+        }
+
         // Check if this is a retryable error
         const isRetryable = errorMsg.toLowerCase().includes('not found') || 
                            errorMsg.toLowerCase().includes('does not exist') ||
@@ -525,8 +567,10 @@ class KeeperClient {
     }
   }
 
-  async grantFolderAccess(folderUid, userEmail, permission, durationSeconds = 86400) {
+  async grantFolderAccess(folderUid, userEmail, permission, durationSeconds = 86400, rotateOnExpire = false) {
     try {
+      try { await this._executeCommandAsync('sync-down', 15); } catch (e) { log.warn('sync-down before share-folder failed, proceeding', e.message); }
+
       // No permission pre-check needed - aligns with Slack app implementation
       // The grant command with revoke+retry pattern handles permission conflicts gracefully
       
@@ -561,6 +605,9 @@ class KeeperClient {
         command += ' --expire-in ' + expireIn;
         const expiresAt = new Date(Date.now() + durationSeconds * 1000);
         expiresAtStr = expiresAt.toISOString();
+        if (rotateOnExpire) {
+          command += ' --rotate-on-expiration';
+        }
       }
       
       command += ' -f';
@@ -573,6 +620,7 @@ class KeeperClient {
         // Check if invitation was sent (user doesn't have Keeper account yet)
         const message = result?.message || '';
         const invitationSent = this._isInvitationSent(message);
+        const pamRotateScheduled = !!(rotateOnExpire && !isPermanent && durationSeconds);
         
         return {
           success: true,
@@ -580,6 +628,7 @@ class KeeperClient {
           permission: permission,
           duration: isPermanent ? 'permanent' : 'temporary',
           invitationSent: invitationSent,
+          rotateOnExpire: pamRotateScheduled,
         };
       } else {
         // Check if the "error" is actually an invitation sent scenario
@@ -599,6 +648,18 @@ class KeeperClient {
           };
         }
         
+        // Detect rotation-not-configured error (non-retryable)
+        if (
+          combinedMessage.includes('rotation must be already set') ||
+          (combinedMessage.includes('rotate') && combinedMessage.includes('expiration') && combinedMessage.includes('set on the record'))
+        ) {
+          return {
+            success: false,
+            errorCode: 'pam_rotation_not_configured',
+            error: 'Rotation is not configured for this PAM User folder.\n\nSet up rotation (Gateway + rotation settings) on the records in this folder in the Keeper Vault first, or uncheck "Rotate credentials when access expires" and approve again.',
+          };
+        }
+
         // Check if this is a "User share failed" error - indicates existing access conflict
         // Try revoking existing access and retrying the grant
         const isUserShareFailed = combinedMessage.includes('user share') && combinedMessage.includes('failed');
@@ -1531,6 +1592,7 @@ try {
     searchFolders: async () => [],
     getRecordByUid: async () => null,
     getFolderByUid: async () => null,
+    isPamUserFolder: async () => false,
     grantRecordAccess: async () => ({ success: false, error: 'Client not initialized' }),
     grantFolderAccess: async () => ({ success: false, error: 'Client not initialized' }),
     createOneTimeShare: async () => ({ success: false, error: 'Client not initialized' }),

@@ -3,7 +3,8 @@
  * Cards for record access requests, search results, and confirmations
  */
 
-const { RECORD_PERMISSIONS, DURATION_OPTIONS, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { RECORD_PERMISSIONS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { isPamUserRecordType } = require('../../utils/helpers');
 const { 
   buildSearchCardHeader, 
   buildCreateSecretHeader,
@@ -28,6 +29,7 @@ function buildRecordApprovalCard({
   justification,
   isUid = true,
   identifier,
+  errorBanner,
 }) {
   const requestedTime = getCurrentTimestamp();
   
@@ -40,6 +42,15 @@ function buildRecordApprovalCard({
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
     body: [
+      ...(errorBanner ? [{
+        type: 'Container',
+        style: 'attention',
+        bleed: true,
+        spacing: 'None',
+        items: [
+          { type: 'TextBlock', text: `⚠ ${errorBanner}`, wrap: true, weight: 'Bolder', color: 'Attention' },
+        ],
+      }] : []),
       { type: 'TextBlock', text: 'Record Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
         type: 'ColumnSet',
@@ -110,13 +121,23 @@ function buildRecordApprovalCard({
     }
     
     // Permission/duration selectors
+    const isPamUser = isPamUserRecordType(recordType);
+    const durationChoices = isPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
     card.body.push(
       { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
       { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
       { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: DURATION_OPTIONS },
+      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
       { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
     );
+
+    if (isPamUser) {
+      card.body.push(
+        { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+        { type: 'TextBlock', text: 'If rotation is configured on the record, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+      );
+    }
     
     card.actions = [
       {
@@ -124,7 +145,7 @@ function buildRecordApprovalCard({
         title: 'Approve',
         style: 'positive',
         verb: 'approve_record',
-        data: { action: 'approve_record', approvalId, recordUid, recordTitle, requesterId, requesterEmail, requesterName },
+        data: { action: 'approve_record', approvalId, recordUid, recordTitle, requesterId, requesterEmail, requesterName, isPamUser },
       },
       {
         type: 'Action.Execute',
@@ -229,6 +250,9 @@ function buildRecordSearchResultsCard({
     
     if (recordCount === 1) {
       const record = foundRecords[0];
+      const isPamUser = isPamUserRecordType(record.recordType);
+      const durationChoices = isPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
       card.body.push(
         { type: 'Container', style: 'good', spacing: 'Medium', items: [
           { type: 'TextBlock', text: `Record Found: ${record.title}`, wrap: true, weight: 'Bolder' },
@@ -237,18 +261,27 @@ function buildRecordSearchResultsCard({
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
         { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
+
+      if (isPamUser) {
+        card.body.push(
+          { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+          { type: 'TextBlock', text: 'If rotation is configured on the record, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+        );
+      }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification, isPamUser } },
         { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
       ];
     } else {
-      const recordChoices = foundRecords.map(r => ({ title: `${r.title} (${r.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: r.uid, title: r.title }) }));
+      const recordChoices = foundRecords.map(r => ({ title: `${r.title} (${r.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: r.uid, title: r.title, recordType: r.recordType }) }));
+      const anyPamUser = foundRecords.some(r => isPamUserRecordType(r.recordType));
+      const durationChoices = anyPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
       
       card.body.push(
         { type: 'Container', style: 'good', spacing: 'Medium', items: [
@@ -260,9 +293,16 @@ function buildRecordSearchResultsCard({
         { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
         { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
         { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
         { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
       );
+
+      if (anyPamUser) {
+        card.body.push(
+          { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+          { type: 'TextBlock', text: 'If rotation is configured on the record, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+        );
+      }
       
       card.actions = [
         { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_record', data: { action: 'approve_selected_record', approvalId, requesterId, requesterEmail, requesterName, justification } },
@@ -292,6 +332,7 @@ function buildRecordApprovalCardWithStatus({
   duration,
   expiresAt,
   processedTime,
+  rotateOnExpire = false,
 }) {
   let statusText;
   let containerStyle;
@@ -401,6 +442,16 @@ function buildRecordApprovalCardWithStatus({
         columns: [
           { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Expires:', weight: 'Bolder', size: 'Small' }] },
           { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: expiresAt, size: 'Small' }] },
+        ],
+      });
+    }
+
+    if (rotateOnExpire) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Credential Rotation:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: 'Enabled on expiry', size: 'Small', color: 'Good' }] },
         ],
       });
     }

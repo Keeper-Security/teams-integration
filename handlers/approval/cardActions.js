@@ -213,6 +213,15 @@ async function handleInlineLookup(verb, data, searchQuery) {
         uid: f.uid || f.folder_uid,
         name: f.name || f.title || f.uid,
       }));
+
+      let isPamFolder = false;
+      if (foundFolders.length > 0) {
+        try {
+          isPamFolder = await keeperClient.isPamUserFolder(foundFolders[0].uid);
+        } catch (e) {
+          log.debug('isPamUserFolder check failed, defaulting to false', e.message);
+        }
+      }
       
       return cards.buildFolderSearchResultsCard({
         approvalId,
@@ -225,6 +234,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
         searchQuery: query,
         foundFolders,
         originalFolderName: folderName,
+        isPamFolder,
       });
     } else if (isShare) {
       const pamRecordTypes = ['pamdirectory', 'pamdatabase', 'pammachine', 'pamuser', 'pamremotebrowser'];
@@ -271,6 +281,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
       const foundRecords = results.map(r => ({
         uid: r.uid || r.record_uid,
         title: r.title || r.name || r.uid,
+        recordType: r.recordType || r.record_type || 'login',
       }));
       
       return cards.buildRecordSearchResultsCard({
