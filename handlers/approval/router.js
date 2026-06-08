@@ -7,7 +7,7 @@
 const keeperClient = require('../../services/keeperClient');
 const cards = require('../../cards');
 const { getChannelService, getApprovalStatus, storeApprovalStatus, createLogger } = require('../../services');
-const { isPermissionConflictError, isRecordOwnerError } = require('../../utils/helpers');
+const { isPermissionConflictError, isRecordOwnerError, isPamUserRecordType } = require('../../utils/helpers');
 const { 
   DURATION_MAP,
   parseDuration, 
@@ -217,12 +217,31 @@ async function processRecordGrantAsync(context, data, approver, params) {
   } = params;
   
   try {
+    // Centralized server-side re-check: only honor rotateOnExpire when the
+    // target record is actually a PAM User record. This gates both the direct
+    // approve_record path and the multi-select approve_selected_record path,
+    // so a tampered/replayed payload can't force rotation on an ineligible record.
+    let effectiveRotateOnExpire = rotateOnExpire;
+    if (effectiveRotateOnExpire) {
+      let recordType = '';
+      try {
+        const rec = await keeperClient.getRecordByUid(recordUid);
+        recordType = rec?.recordType || '';
+      } catch (e) {
+        log.debug('Record type lookup for rotate-on-expire gate failed, treating as ineligible', e.message);
+      }
+      if (!isPamUserRecordType(recordType)) {
+        log.warn('rotateOnExpire requested for non-PAM record, ignoring flag', { recordUid, recordType });
+        effectiveRotateOnExpire = false;
+      }
+    }
+
     const result = await keeperClient.grantRecordAccess(
       recordUid,
       requesterEmail,
       permission,
       durationSeconds,
-      rotateOnExpire
+      effectiveRotateOnExpire
     );
     
     let finalCard;
@@ -493,12 +512,30 @@ async function processFolderGrantAsync(context, data, approver, params) {
   } = params;
   
   try {
+    // Centralized server-side re-check: only honor rotateOnExpire when the
+    // target folder is actually ROE-eligible. This gates both the direct
+    // approve_folder path and the multi-select approve_selected_folder path,
+    // so a tampered/replayed payload can't force rotation on an ineligible folder.
+    let effectiveRotateOnExpire = rotateOnExpire;
+    if (effectiveRotateOnExpire) {
+      let eligible = false;
+      try {
+        eligible = await keeperClient.isPamUserFolder(folderUid);
+      } catch (e) {
+        log.debug('Folder ROE-eligibility lookup for rotate-on-expire gate failed, treating as ineligible', e.message);
+      }
+      if (!eligible) {
+        log.warn('rotateOnExpire requested for non-eligible folder, ignoring flag', { folderUid });
+        effectiveRotateOnExpire = false;
+      }
+    }
+
     const result = await keeperClient.grantFolderAccess(
       folderUid,
       requesterEmail,
       permission,
       durationSeconds,
-      rotateOnExpire
+      effectiveRotateOnExpire
     );
     
     let finalCard;
