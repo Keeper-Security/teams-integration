@@ -92,6 +92,31 @@ function isPamRecordError(errorMessage) {
 }
 
 /**
+ * Check if a record type is a PAM User record (eligible for rotate-on-expire).
+ * @param {string} recordType - Record type string from Keeper
+ * @returns {boolean}
+ */
+function isPamUserRecordType(recordType) {
+  if (!recordType || typeof recordType !== 'string') return false;
+  return recordType.toLowerCase().startsWith('pamuser');
+}
+
+/**
+ * Check if rotation-not-configured error was returned by Commander.
+ * @param {string} errorMessage - Error message from Keeper
+ * @returns {boolean}
+ */
+function isRotationNotConfiguredError(errorMessage) {
+  if (!errorMessage || typeof errorMessage !== 'string') return false;
+  const lower = errorMessage.toLowerCase();
+  return (
+    lower.includes('rotation must be already set') ||
+    (lower.includes('rotate') && lower.includes('expiration') && lower.includes('set on the record')) ||
+    (lower.includes('--rotate-on-expiration') && (lower.includes('requires') || lower.includes('ineligible')))
+  );
+}
+
+/**
  * Sanitize text to prevent URL injection attacks.
  * Removes colons and forward slashes that could create clickable hyperlinks in Teams.
  * Used for UIDs and justification text displayed in cards.
@@ -115,5 +140,7 @@ module.exports = {
   isPermissionConflictError,
   isRecordOwnerError,
   isPamRecordError,
+  isPamUserRecordType,
+  isRotationNotConfiguredError,
   sanitizeHyperlinks,
 };

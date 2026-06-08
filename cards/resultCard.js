@@ -550,6 +550,7 @@ function buildRequesterNotificationCard({
   approverName,
   denialReason,
   itemType = 'record',
+  rotateOnExpire = false,
 }) {
   const statusText = approved ? 'Your Access Request Has Been Approved!' : 'Your Access Request Has Been Denied';
   const containerStyle = approved ? 'good' : 'attention';
@@ -628,6 +629,7 @@ function buildRequesterNotificationCard({
             { title: 'Permission', value: formatPermission(permission) },
             { title: 'Duration', value: duration || 'Permanent' },
             ...(expiresAt ? [{ title: 'Expires', value: expiresAt }] : [{ title: 'Expires', value: 'Never (Permanent)' }]),
+            ...(rotateOnExpire ? [{ title: 'Credential Rotation', value: 'Enabled on expiry' }] : []),
           ],
         },
       ],

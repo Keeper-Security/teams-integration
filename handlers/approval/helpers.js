@@ -12,6 +12,9 @@ const log = createLogger('ApprovalHelpers');
  * Duration string to seconds mapping
  */
 const DURATION_MAP = {
+  '5m': 300,
+  '10m': 600,
+  '30m': 1800,
   '1h': 3600,
   '4h': 14400,
   '8h': 28800,
