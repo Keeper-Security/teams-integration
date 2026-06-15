@@ -5,6 +5,7 @@
  */
 
 const { getChannelService, getApprovalActivityId, removeApprovalActivityId, createLogger } = require('../../services');
+const { formatCardDateTime } = require('../../utils/helpers');
 
 const log = createLogger('ApprovalHelpers');
 
@@ -24,8 +25,9 @@ const DURATION_MAP = {
   'permanent': null,
 };
 
-// Permissions that are always permanent (no expiration allowed)
-const RECORD_PERMANENT_PERMISSIONS = ['can_share', 'edit_and_share', 'change_owner'];
+// Permissions that are always permanent (no expiration allowed).
+// 'owner' covers the NSF Transfer Ownership role (always permanent).
+const RECORD_PERMANENT_PERMISSIONS = ['can_share', 'edit_and_share', 'change_owner', 'owner'];
 const FOLDER_PERMANENT_PERMISSIONS = ['manage_users', 'manage_all'];
 
 /**
@@ -34,7 +36,10 @@ const FOLDER_PERMANENT_PERMISSIONS = ['manage_users', 'manage_all'];
  * @returns {number|null} - Seconds or null for permanent
  */
 function parseDuration(duration) {
-  return DURATION_MAP[duration] ?? 86400;
+  if (Object.prototype.hasOwnProperty.call(DURATION_MAP, duration)) {
+    return DURATION_MAP[duration];
+  }
+  return 86400;
 }
 
 /**
@@ -71,20 +76,8 @@ function formatExpiryDate(expiresAt) {
     }
   }
   
-  const expiryDate = new Date(expiresAt);
-  if (isNaN(expiryDate.getTime())) {
-    return expiresAt;
-  }
-  
-  return expiryDate.toLocaleString('en-US', {
-    month: '2-digit',
-    day: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
+  // Render via Adaptive Card DATE()/TIME() so each viewer sees their own timezone.
+  return formatCardDateTime(expiresAt);
 }
 
 /**
@@ -272,12 +265,13 @@ async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
 }
 
 /**
- * Get current timestamp formatted for display
- * Returns format: "YYYY-MM-DD HH:MM:SS"
- * @returns {string} Formatted timestamp
+ * Get current timestamp for display in an Adaptive Card.
+ * Returns Adaptive Card DATE()/TIME() tokens so each viewer sees the time in
+ * their own local timezone.
+ * @returns {string} Adaptive Card date/time token
  */
 function getCurrentTimestamp() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19);
+  return formatCardDateTime(new Date());
 }
 
 

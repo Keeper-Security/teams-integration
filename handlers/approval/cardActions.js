@@ -51,6 +51,7 @@ async function handleRefreshApprovalCard(data) {
       duration: status.duration,
       expiresAt: status.expiresAt,
       processedTime: status.processedTime,
+      isNsf: status.isNsf,
     });
   } else if (type === 'folder') {
     return cards.buildFolderApprovalCardWithStatus({
@@ -65,6 +66,7 @@ async function handleRefreshApprovalCard(data) {
       duration: status.duration,
       expiresAt: status.expiresAt,
       processedTime: status.processedTime,
+      isNsf: status.isNsf,
     });
   }
   
@@ -212,10 +214,14 @@ async function handleInlineLookup(verb, data, searchQuery) {
       const foundFolders = results.map(f => ({
         uid: f.uid || f.folder_uid,
         name: f.name || f.title || f.uid,
+        isNsf: !!f.isNsf,
       }));
 
+      const allNsf = foundFolders.length > 0 && foundFolders.every(f => f.isNsf);
+
+      // PAM eligibility only applies to classic (non-NSF) folders.
       let isPamFolder = false;
-      if (foundFolders.length > 0) {
+      if (foundFolders.length > 0 && !allNsf) {
         try {
           isPamFolder = await keeperClient.isPamUserFolder(foundFolders[0].uid);
         } catch (e) {
@@ -235,16 +241,21 @@ async function handleInlineLookup(verb, data, searchQuery) {
         foundFolders,
         originalFolderName: folderName,
         isPamFolder,
+        isNsf: allNsf,
       });
     } else if (isShare) {
+      // One-Time Shares only work on classic records. Commander's
+      // one-time-share supports neither PAM nor Nested Share Folder (NSF)
+      // records, so filter both out of the OTS search results.
       const pamRecordTypes = ['pamdirectory', 'pamdatabase', 'pammachine', 'pamuser', 'pamremotebrowser'];
       const filteredResults = results.filter(r => {
         const recordType = (r.recordType || r.record_type || '').toLowerCase();
-        return !pamRecordTypes.some(pamType => recordType.includes(pamType));
+        const isPam = pamRecordTypes.some(pamType => recordType.includes(pamType));
+        return !isPam && !r.isNsf;
       });
       
       if (filteredResults.length === 0) {
-        log.debug('All search results were PAM records, showing no results message');
+        log.debug('All search results were PAM/NSF records (ineligible for one-time share), showing no results message');
         return cards.buildShareSearchResultsCard({
           approvalId,
           requesterName,
@@ -282,7 +293,10 @@ async function handleInlineLookup(verb, data, searchQuery) {
         uid: r.uid || r.record_uid,
         title: r.title || r.name || r.uid,
         recordType: r.recordType || r.record_type || 'login',
+        isNsf: !!r.isNsf,
       }));
+
+      const allNsf = foundRecords.length > 0 && foundRecords.every(r => r.isNsf);
       
       return cards.buildRecordSearchResultsCard({
         approvalId,
@@ -295,6 +309,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
         searchQuery: query,
         foundRecords,
         originalRecordTitle: recordTitle,
+        isNsf: allNsf,
       });
     }
   } catch (error) {
@@ -685,7 +700,7 @@ async function handleCancelCreateForm(data) {
     justification,
     identifier,
     searchQuery: query,
-    records: searchResults,
+    foundRecords: searchResults,
     noResults,
     originalRecordTitle: recordTitle,
   });

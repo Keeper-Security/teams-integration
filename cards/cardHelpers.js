@@ -4,7 +4,7 @@
  */
 
 const { RECORD_PERMISSIONS, FOLDER_PERMISSIONS } = require('./constants');
-const { sanitizeHyperlinks } = require('../utils/helpers');
+const { sanitizeHyperlinks, formatCardDateTime } = require('../utils/helpers');
 
 /**
  * Build common header section for search results cards
@@ -232,7 +232,7 @@ function formatFolderPermissionLabel(permission) {
  * @returns {string} Formatted timestamp
  */
 function getCurrentTimestamp() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19);
+  return formatCardDateTime(new Date());
 }
 
 module.exports = {

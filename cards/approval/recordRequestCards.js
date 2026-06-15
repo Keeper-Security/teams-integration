@@ -3,7 +3,7 @@
  * Cards for record access requests, search results, and confirmations
  */
 
-const { RECORD_PERMISSIONS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { RECORD_PERMISSIONS, NSF_PERMISSIONS, NSF_RECORD_PERMISSIONS, NSF_ROLE_LABELS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
 const { isPamUserRecordType } = require('../../utils/helpers');
 const { 
   buildSearchCardHeader, 
@@ -30,6 +30,7 @@ function buildRecordApprovalCard({
   isUid = true,
   identifier,
   errorBanner,
+  isNsf = false,
 }) {
   const requestedTime = getCurrentTimestamp();
   
@@ -103,6 +104,7 @@ function buildRecordApprovalCard({
           justification,
           identifier,
           isUid,
+          isNsf,
         },
       },
     };
@@ -121,16 +123,26 @@ function buildRecordApprovalCard({
     }
     
     // Permission/duration selectors
-    const isPamUser = isPamUserRecordType(recordType);
+    const isPamUser = !isNsf && isPamUserRecordType(recordType);
     const durationChoices = isPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
 
-    card.body.push(
-      { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-      { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
-      { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
-    );
+    if (isNsf) {
+      card.body.push(
+        { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
+        { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+      );
+    } else {
+      card.body.push(
+        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
+        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+      );
+    }
 
     if (isPamUser) {
       card.body.push(
@@ -145,7 +157,7 @@ function buildRecordApprovalCard({
         title: 'Approve',
         style: 'positive',
         verb: 'approve_record',
-        data: { action: 'approve_record', approvalId, recordUid, recordTitle, requesterId, requesterEmail, requesterName, isPamUser },
+        data: { action: 'approve_record', approvalId, recordUid, recordTitle, requesterId, requesterEmail, requesterName, isPamUser, isNsf },
       },
       {
         type: 'Action.Execute',
@@ -205,6 +217,7 @@ function buildRecordSearchResultsCard({
   foundRecords,
   noResults = false,
   originalRecordTitle,
+  isNsf = false,
 }) {
   const headerElements = buildSearchCardHeader('Record Access Request', requesterName, approvalId, justification);
   
@@ -250,20 +263,34 @@ function buildRecordSearchResultsCard({
     
     if (recordCount === 1) {
       const record = foundRecords[0];
-      const isPamUser = isPamUserRecordType(record.recordType);
+      const recordIsNsf = record.isNsf != null ? !!record.isNsf : !!isNsf;
+      const isPamUser = !recordIsNsf && isPamUserRecordType(record.recordType);
       const durationChoices = isPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
 
       card.body.push(
         { type: 'Container', style: 'good', spacing: 'Medium', items: [
           { type: 'TextBlock', text: `Record Found: ${record.title}`, wrap: true, weight: 'Bolder' },
           { type: 'TextBlock', text: `UID: ${record.uid}`, size: 'Small', isSubtle: true },
-        ]},
-        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
-        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        ]}
       );
+
+      if (recordIsNsf) {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      } else {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      }
 
       if (isPamUser) {
         card.body.push(
@@ -273,14 +300,15 @@ function buildRecordSearchResultsCard({
       }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification, isPamUser } },
+        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification, isPamUser, isNsf: recordIsNsf } },
         { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
       ];
     } else {
-      const recordChoices = foundRecords.map(r => ({ title: `${r.title} (${r.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: r.uid, title: r.title, recordType: r.recordType }) }));
-      const anyPamUser = foundRecords.some(r => isPamUserRecordType(r.recordType));
+      const recordChoices = foundRecords.map(r => ({ title: `${r.title} (${r.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: r.uid, title: r.title, recordType: r.recordType, isNsf: !!r.isNsf }) }));
+      const allNsf = foundRecords.length > 0 && foundRecords.every(r => r.isNsf);
+      const anyPamUser = !allNsf && foundRecords.some(r => isPamUserRecordType(r.recordType));
       const durationChoices = anyPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
       
       card.body.push(
@@ -289,13 +317,26 @@ function buildRecordSearchResultsCard({
           { type: 'TextBlock', text: 'Select the correct record from the list below:', size: 'Small', isSubtle: true },
         ]},
         { type: 'TextBlock', text: 'Select Record', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'selectedRecord', value: recordChoices[0].value, choices: recordChoices, style: 'expanded' },
-        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
-        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        { type: 'Input.ChoiceSet', id: 'selectedRecord', value: recordChoices[0].value, choices: recordChoices, style: 'expanded' }
       );
+
+      if (allNsf) {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      } else {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      }
 
       if (anyPamUser) {
         card.body.push(
@@ -305,7 +346,7 @@ function buildRecordSearchResultsCard({
       }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_record', data: { action: 'approve_selected_record', approvalId, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_record', data: { action: 'approve_selected_record', approvalId, requesterId, requesterEmail, requesterName, justification, isNsf: allNsf } },
         { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: '↩️ Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: null, recordTitle: originalRecordTitle, requesterId, requesterEmail, requesterName, justification } },
@@ -333,6 +374,7 @@ function buildRecordApprovalCardWithStatus({
   expiresAt,
   processedTime,
   rotateOnExpire = false,
+  isNsf = false,
 }) {
   let statusText;
   let containerStyle;
@@ -407,11 +449,24 @@ function buildRecordApprovalCardWithStatus({
     }
     
     if (permission) {
+      const permLabel = isNsf
+        ? (NSF_ROLE_LABELS[permission] || permission)
+        : formatPermissionLabel(permission);
       detailsItems.push({
         type: 'ColumnSet',
         columns: [
-          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
-          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatPermissionLabel(permission), size: 'Small' }] },
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: isNsf ? 'Nested Share Role:' : 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: permLabel, size: 'Small' }] },
+        ],
+      });
+    }
+
+    if (isNsf) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Folder Type:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: 'Nested Share', size: 'Small', color: 'Accent' }] },
         ],
       });
     }
@@ -636,6 +691,7 @@ function buildRecordCreationCard({
   recordPassword: prevRecordPassword,
   recordUrl: prevRecordUrl,
   recordNotes: prevRecordNotes,
+  autoGeneratePassword: prevAutoGeneratePassword,
 }) {
   const headerElements = createSecretFlow
     ? buildCreateSecretHeader(requesterName || 'Unknown', requesterEmail || '')
@@ -655,7 +711,7 @@ function buildRecordCreationCard({
   
   const introText = createSecretFlow
     ? 'Record title is required. Leave password empty to auto-generate one.'
-    : 'Create a new record to share with the requester:';
+    : 'Create a new record to share with the requester. Use auto-generate for a Keeper-compliant password, or enter one manually.';
 
   const secretFormLocked = createSecretFlow && noSharedFoldersForUser;
   const inputEnabled = !secretFormLocked;
@@ -830,24 +886,22 @@ function buildRecordCreationCard({
       value: prevRecordPassword || '',
       ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
     },
-    ...(createSecretFlow ? [
-      {
-        type: 'TextBlock',
-        text: '\uD83D\uDD12 Auto-generate passwords to keep them fully private. Generated passwords stay in your Keeper Vault (zero-knowledge), while manually entered passwords pass through Teams.',
-        wrap: true,
-        isSubtle: true,
-        size: 'Small',
-        spacing: 'None',
-        color: 'Warning',
-      },
-      {
-        type: 'Input.Toggle',
-        id: 'autoGeneratePassword',
-        title: 'Auto-generate a strong password',
-        value: 'false',
-        ...(inputEnabled ? {} : { isEnabled: false }),
-      },
-    ] : []),
+    {
+      type: 'TextBlock',
+      text: '\uD83D\uDD12 Auto-generate passwords to keep them fully private. Generated passwords stay in your Keeper Vault (zero-knowledge), while manually entered passwords pass through Teams.',
+      wrap: true,
+      isSubtle: true,
+      size: 'Small',
+      spacing: 'None',
+      color: 'Warning',
+    },
+    {
+      type: 'Input.Toggle',
+      id: 'autoGeneratePassword',
+      title: 'Auto-generate a strong password',
+      value: prevAutoGeneratePassword === true || prevAutoGeneratePassword === 'true' ? 'true' : 'false',
+      ...(createSecretFlow && !inputEnabled ? { isEnabled: false } : {}),
+    },
     { type: 'TextBlock', text: createSecretFlow ? 'URL' : 'URL (optional)', weight: 'Bolder', spacing: 'Small' },
     {
       type: 'Input.Text',
@@ -895,7 +949,7 @@ function buildRecordCreationCard({
       },
       {
         type: 'Action.Execute',
-        title: 'Cancel',
+        title: createSecretFlow ? 'Cancel' : 'Back to Request',
         verb: createSecretFlow ? 'cancel_create_secret' : 'cancel_create_form',
         isEnabled: true,
         associatedInputs: 'none',

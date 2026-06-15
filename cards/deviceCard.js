@@ -5,6 +5,8 @@
  * allowing admins to approve or deny new device registrations.
  */
 
+const { formatCardDateTime } = require('../utils/helpers');
+
 /**
  * Build an Adaptive Card for device approval request
  */
@@ -202,19 +204,8 @@ function buildDeviceDeniedCard(approverName, deviceName, username, deviceId) {
 }
 
 function formatDate(dateStr) {
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch (e) {
-    return dateStr;
-  }
+  // Render via Adaptive Card DATE()/TIME() so each viewer sees their own timezone.
+  return formatCardDateTime(dateStr);
 }
 
 module.exports = {

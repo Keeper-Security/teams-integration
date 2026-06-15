@@ -3,7 +3,7 @@
  * Cards for folder access requests, search results, and confirmations
  */
 
-const { FOLDER_PERMISSIONS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, DEFAULT_DURATION } = require('../constants');
+const { FOLDER_PERMISSIONS, NSF_PERMISSIONS, NSF_ROLE_LABELS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, DEFAULT_DURATION } = require('../constants');
 const { 
   buildSearchCardHeader, 
   buildNoResultsSection, 
@@ -30,6 +30,7 @@ function buildFolderApprovalCard({
   identifier,
   isPamFolder = false,
   errorBanner,
+  isNsf = false,
 }) {
   const requestedTime = getCurrentTimestamp();
   
@@ -103,6 +104,7 @@ function buildFolderApprovalCard({
           justification,
           identifier,
           isUid,
+          isNsf,
         },
       },
     };
@@ -121,17 +123,28 @@ function buildFolderApprovalCard({
     }
     
     // Permission/duration selectors
-    const durationChoices = isPamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+    const pamFolder = !isNsf && isPamFolder;
+    const durationChoices = pamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
 
-    card.body.push(
-      { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
-      { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
-      { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
-    );
+    if (isNsf) {
+      card.body.push(
+        { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_PERMISSIONS },
+        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
+        { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+      );
+    } else {
+      card.body.push(
+        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
+        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
+        { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+      );
+    }
 
-    if (isPamFolder) {
+    if (pamFolder) {
       card.body.push(
         { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
         { type: 'TextBlock', text: 'If rotation is configured on the underlying records, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
@@ -144,7 +157,7 @@ function buildFolderApprovalCard({
         title: 'Approve',
         style: 'positive',
         verb: 'approve_folder',
-        data: { action: 'approve_folder', approvalId, folderUid, folderName, requesterId, requesterEmail, requesterName, isPamFolder },
+        data: { action: 'approve_folder', approvalId, folderUid, folderName, requesterId, requesterEmail, requesterName, isPamFolder: pamFolder, isNsf },
       },
       {
         type: 'Action.Execute',
@@ -199,6 +212,7 @@ function buildFolderSearchResultsCard({
   noResults = false,
   originalFolderName,
   isPamFolder = false,
+  isNsf = false,
 }) {
   const headerElements = buildSearchCardHeader('Folder Access Request', requesterName, approvalId, justification);
   
@@ -227,17 +241,29 @@ function buildFolderSearchResultsCard({
     
     if (folderCount === 1) {
       const folder = foundFolders[0];
-      const durationChoices = isPamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+      const folderIsNsf = folder.isNsf != null ? !!folder.isNsf : !!isNsf;
+      const pamFolder = !folderIsNsf && isPamFolder;
+      const durationChoices = pamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
 
-      card.body.push(
-        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
-        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
-        { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
-      );
+      if (folderIsNsf) {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      } else {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      }
 
-      if (isPamFolder) {
+      if (pamFolder) {
         card.body.push(
           { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
           { type: 'TextBlock', text: 'If rotation is configured on the underlying records, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
@@ -245,26 +271,40 @@ function buildFolderSearchResultsCard({
       }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_folder', data: { action: 'approve_folder', approvalId, folderUid: folder.uid, folderName: folder.name, requesterId, requesterEmail, requesterName, justification, isPamFolder } },
+        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_folder', data: { action: 'approve_folder', approvalId, folderUid: folder.uid, folderName: folder.name, requesterId, requesterEmail, requesterName, justification, isPamFolder: pamFolder, isNsf: folderIsNsf } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_folder_card', data: { action: 'reset_folder_card', ...baseData, folderName: originalFolderName } },
         { type: 'Action.Execute', title: 'Deny', style: 'destructive', verb: 'deny_folder', data: { action: 'deny_folder', approvalId, folderUid: folder.uid, folderName: folder.name, requesterId, requesterEmail, requesterName, justification } },
       ];
     } else {
-      const folderChoices = foundFolders.map(f => ({ title: `${f.name} (${f.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: f.uid, name: f.name }) }));
-      
-      const durationChoices = isPamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+      const folderChoices = foundFolders.map(f => ({ title: `${f.name} (${f.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: f.uid, name: f.name, isNsf: !!f.isNsf }) }));
+      const allNsf = foundFolders.length > 0 && foundFolders.every(f => f.isNsf);
+      const pamFolder = !allNsf && isPamFolder;
+      const durationChoices = pamFolder ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
 
       card.body.push(
         { type: 'TextBlock', text: 'Select Folder', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'selectedFolder', value: folderChoices[0].value, choices: folderChoices, style: 'expanded' },
-        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
-        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
-        { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        { type: 'Input.ChoiceSet', id: 'selectedFolder', value: folderChoices[0].value, choices: folderChoices, style: 'expanded' }
       );
 
-      if (isPamFolder) {
+      if (allNsf) {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      } else {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'no_permissions', choices: FOLDER_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Note: Manage Users and Manage All permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      }
+
+      if (pamFolder) {
         card.body.push(
           { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
           { type: 'TextBlock', text: 'If rotation is configured on the underlying records, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
@@ -272,7 +312,7 @@ function buildFolderSearchResultsCard({
       }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_folder', data: { action: 'approve_selected_folder', approvalId, requesterId, requesterEmail, requesterName, justification, isPamFolder } },
+        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_folder', data: { action: 'approve_selected_folder', approvalId, requesterId, requesterEmail, requesterName, justification, isPamFolder: pamFolder, isNsf: allNsf } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_folder_card', data: { action: 'reset_folder_card', ...baseData, folderName: originalFolderName } },
         { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_folder', data: { action: 'deny_folder', approvalId, folderUid: null, folderName: originalFolderName, requesterId, requesterEmail, requesterName, justification } },
       ];
@@ -299,6 +339,7 @@ function buildFolderApprovalCardWithStatus({
   expiresAt,
   processedTime,
   rotateOnExpire = false,
+  isNsf = false,
 }) {
   let statusText;
   let containerStyle;
@@ -373,11 +414,24 @@ function buildFolderApprovalCardWithStatus({
     }
     
     if (permission) {
+      const permLabel = isNsf
+        ? (NSF_ROLE_LABELS[permission] || permission)
+        : formatFolderPermissionLabel(permission);
       detailsItems.push({
         type: 'ColumnSet',
         columns: [
-          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
-          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatFolderPermissionLabel(permission), size: 'Small' }] },
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: isNsf ? 'Nested Share Role:' : 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: permLabel, size: 'Small' }] },
+        ],
+      });
+    }
+
+    if (isNsf) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Folder Type:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: 'Nested Share', size: 'Small', color: 'Accent' }] },
         ],
       });
     }
