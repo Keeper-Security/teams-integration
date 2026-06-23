@@ -17,6 +17,7 @@ const {
   handleSubmitCreateRecord, 
   handleCancelCreateForm 
 } = require('./cardActions');
+const { handleRefreshPostCreateCard } = require('./postCreate');
 
 module.exports = {
   routeApprovalAction,
@@ -33,6 +34,7 @@ module.exports = {
   handleShowCreateForm,
   handleSubmitCreateRecord,
   handleCancelCreateForm,
+  handleRefreshPostCreateCard,
   parseDuration,
   DURATION_MAP,
 };

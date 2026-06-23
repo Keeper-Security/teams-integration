@@ -25,9 +25,45 @@ const FOLDER_PERMISSIONS = [
 ];
 
 /**
+ * Permission roles for Nested Share Folder (NSF) records and folders,
+ * in order of increasing privilege. Used by nsf-share-record / nsf-share-folder.
+ */
+const NSF_PERMISSIONS = [
+  { title: 'Viewer', value: 'viewer' },
+  { title: 'Share Manager', value: 'share-manager' },
+  { title: 'Content Manager', value: 'content-manager' },
+  { title: 'Content & Share Manager', value: 'content-share-manager' },
+  { title: 'Full Manager', value: 'full-manager' },
+];
+
+/**
+ * NSF permission roles for records. Adds Transfer Ownership, which is only
+ * supported on records (not folders) and is always permanent.
+ */
+const NSF_RECORD_PERMISSIONS = [
+  ...NSF_PERMISSIONS,
+  { title: 'Transfer Ownership (Permanent)', value: 'owner' },
+];
+
+/**
+ * Friendly display labels for NSF roles.
+ */
+const NSF_ROLE_LABELS = {
+  'viewer': 'Viewer',
+  'share-manager': 'Share Manager',
+  'content-manager': 'Content Manager',
+  'content-share-manager': 'Content & Share Manager',
+  'full-manager': 'Full Manager',
+  'owner': 'Transfer Ownership',
+};
+
+/**
  * Duration options for time-limited access
  */
 const DURATION_OPTIONS = [
+  { title: '5 minutes', value: '5m' },
+  { title: '10 minutes', value: '10m' },
+  { title: '30 minutes', value: '30m' },
   { title: '1 hour', value: '1h' },
   { title: '4 hours', value: '4h' },
   { title: '8 hours', value: '8h' },
@@ -38,9 +74,18 @@ const DURATION_OPTIONS = [
 ];
 
 /**
+ * Duration options excluding Permanent (used for PAM User targets where
+ * rotate-on-expire is incompatible with permanent access)
+ */
+const DURATION_OPTIONS_NO_PERMANENT = DURATION_OPTIONS.filter(o => o.value !== 'permanent');
+
+/**
  * Share duration options (subset for one-time shares)
  */
 const SHARE_DURATION_OPTIONS = [
+  { title: '5 minutes', value: '5m' },
+  { title: '10 minutes', value: '10m' },
+  { title: '30 minutes', value: '30m' },
   { title: '1 hour', value: '1h' },
   { title: '4 hours', value: '4h' },
   { title: '24 hours', value: '24h' },
@@ -51,6 +96,10 @@ const SHARE_DURATION_OPTIONS = [
  * Self-destruct duration options for auto-deleting records
  */
 const SELF_DESTRUCT_DURATION_OPTIONS = [
+  { title: '5 minutes', value: '5m' },
+  { title: '10 minutes', value: '10m' },
+  { title: '15 minutes', value: '15m' },
+  { title: '30 minutes', value: '30m' },
   { title: '1 hour', value: '1h' },
   { title: '24 hours', value: '24h' },
   { title: '7 days', value: '7d' },
@@ -66,7 +115,11 @@ const DEFAULT_DURATION = '24h';
 module.exports = {
   RECORD_PERMISSIONS,
   FOLDER_PERMISSIONS,
+  NSF_PERMISSIONS,
+  NSF_RECORD_PERMISSIONS,
+  NSF_ROLE_LABELS,
   DURATION_OPTIONS,
+  DURATION_OPTIONS_NO_PERMANENT,
   SHARE_DURATION_OPTIONS,
   SELF_DESTRUCT_DURATION_OPTIONS,
   DEFAULT_DURATION,

@@ -44,8 +44,8 @@ function buildShareSearchResultsCard({
           { type: 'TextBlock', text: 'No Eligible Records Found', weight: 'Bolder', color: 'Attention' },
           { type: 'TextBlock', text: `Search: "${searchQuery}"`, size: 'Small', isSubtle: true, wrap: true },
         ]},
-        { type: 'TextBlock', text: 'The search returned only PAM records (pamDirectory, pamDatabase, pamMachine, pamUser, pamRemoteBrowser).', wrap: true, spacing: 'Small' },
-        { type: 'TextBlock', text: 'One-Time Shares are not available for PAM records. The requester should use `keeper-request-record` to request direct access instead.', wrap: true, spacing: 'Small', isSubtle: true },
+        { type: 'TextBlock', text: 'The search returned only PAM records (pamDirectory, pamDatabase, pamMachine, pamUser, pamRemoteBrowser) and/or Nested Share Folder records.', wrap: true, spacing: 'Small' },
+        { type: 'TextBlock', text: 'One-Time Shares are not available for PAM or Nested Share Folder records. The requester should use `keeper-request-record` to request direct access instead.', wrap: true, spacing: 'Small', isSubtle: true },
         { type: 'TextBlock', text: 'Search Input', weight: 'Bolder', spacing: 'Medium' },
         { type: 'Input.Text', id: 'searchQuery', placeholder: 'Enter record name...', value: searchQuery || '' }
       );

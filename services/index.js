@@ -20,6 +20,9 @@ const {
   removeApprovalActivityId,
   storeApprovalStatus,
   getApprovalStatus,
+  getTerminalApprovalStatus,
+  isTerminalApprovalStatus,
+  formatTerminalApprovalStatusDisplay,
   isApprovalProcessed,
 } = require('./channelService');
 
@@ -41,5 +44,8 @@ module.exports = {
   removeApprovalActivityId,
   storeApprovalStatus,
   getApprovalStatus,
+  getTerminalApprovalStatus,
+  isTerminalApprovalStatus,
+  formatTerminalApprovalStatusDisplay,
   isApprovalProcessed,
 };

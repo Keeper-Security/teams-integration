@@ -279,6 +279,27 @@ app.on("invoke", async (context) => {
     
     log.debug('Action', { verb, action });
     
+    if (verb === 'refreshPostCreateCard') {
+      try {
+        log.debug('Processing refresh for post-create', data.approvalId);
+        const { handleRefreshPostCreateCard } = require('./handlers/approvalHandler');
+        const updatedCard = handleRefreshPostCreateCard(data);
+
+        if (updatedCard) {
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: updatedCard,
+          };
+        }
+
+        return { statusCode: 200 };
+      } catch (error) {
+        log.error('Error refreshing post-create card', error);
+        return { statusCode: 200 };
+      }
+    }
+
     if (verb === 'refreshApprovalCard') {
       try {
         log.debug('Processing refresh for approval', data.approvalId);
@@ -367,25 +388,33 @@ app.on("invoke", async (context) => {
           ...(v.action?.data || {}),
           ...(v.data || {}),
         };
+        const formField = (key) => (v[key] != null ? v[key] : merged[key]);
 
         const isCreateSecretFlow =
           merged.createSecretFlow === true ||
           merged.createSecretFlow === 'true';
 
-        const recordTitle = (merged.recordTitle || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
-        const recordLogin = (merged.recordLogin || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
-        const recordPassword = merged.recordPassword || '';
-        const recordUrl = (merged.recordUrl || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
-        const recordNotes = merged.recordNotes || '';
-        const targetFolderUidRaw = merged.targetFolderUid;
+        const recordTitle = (formField('recordTitle') || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordLogin = (formField('recordLogin') || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordPassword = formField('recordPassword') || '';
+        const recordUrl = (formField('recordUrl') || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordNotes = formField('recordNotes') || '';
+        const targetFolderUidRaw = formField('targetFolderUid');
+        const autoGenToggle = formField('autoGeneratePassword') || 'false';
+        const autoGenChecked = autoGenToggle === 'true' || autoGenToggle === true;
+        const hasManualPassword = !!recordPassword?.trim();
+
+        const useClassic = !isCreateSecretFlow && (
+          formField('useClassic') === 'true' || formField('useClassic') === true
+        );
 
         let selfDestructEnabled = false;
         let selfDestructDuration = null;
-        if (!isCreateSecretFlow) {
-          const selfDestructToggle = merged.selfDestruct || 'false';
+        if (!isCreateSecretFlow && useClassic) {
+          const selfDestructToggle = formField('selfDestruct') || 'false';
           selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
           selfDestructDuration = selfDestructEnabled
-            ? (merged.selfDestructDuration || '24h')
+            ? (formField('selfDestructDuration') || '24h')
             : null;
         }
 
@@ -409,6 +438,10 @@ app.on("invoke", async (context) => {
             recordPassword: opts.clearPassword ? '' : recordPassword,
             recordUrl,
             recordNotes,
+            autoGeneratePassword: merged.autoGeneratePassword,
+            useClassic,
+            selfDestruct: selfDestructEnabled ? 'true' : 'false',
+            selfDestructDuration: selfDestructDuration || '24h',
           });
 
         const pickValidTargetFolderUid = (raw, choices) => {
@@ -445,6 +478,7 @@ app.on("invoke", async (context) => {
             recordPassword: opts.clearPassword ? '' : recordPassword,
             recordUrl,
             recordNotes,
+            autoGeneratePassword: merged.autoGeneratePassword,
           });
         };
 
@@ -470,6 +504,9 @@ app.on("invoke", async (context) => {
           const validationErrors = [];
           if (!folderSelected) validationErrors.push('Shared folder selection is required');
           if (!recordTitle?.trim()) validationErrors.push('Title is required');
+          if (autoGenChecked && hasManualPassword) {
+            validationErrors.push('Choose either Auto-generate password or enter a manual password, not both');
+          }
           if (!isValidRecordUrl(recordUrl)) validationErrors.push('URL must start with http:// or https://');
           if (validationErrors.length > 0) {
             const errorMessage = validationErrors.join('. ');
@@ -484,6 +521,9 @@ app.on("invoke", async (context) => {
           const errors = [];
           if (!recordTitle?.trim()) errors.push('Title is required');
           if (!recordLogin?.trim()) errors.push('Login is required');
+          if (autoGenChecked && hasManualPassword) {
+            errors.push('Choose either Auto-generate password or enter a manual password, not both');
+          }
           if (!isValidRecordUrl(recordUrl)) errors.push('URL must start with http:// or https://');
           if (errors.length > 0) {
             const errorMessage = errors.join('. ');
@@ -499,8 +539,7 @@ app.on("invoke", async (context) => {
         if (isCreateSecretFlow) {
           log.debug('submit_create_record: create-secret (self-service) flow');
           const keeperClient = require('./services/keeperClient');
-          const autoGenToggle = merged.autoGeneratePassword || 'false';
-          const generatePassword = autoGenToggle === 'true' || autoGenToggle === true;
+          const generatePassword = autoGenChecked;
           const loginTrimmed = recordLogin?.trim() || '';
 
           const subfolderUidRaw = merged.targetSubfolderUid;
@@ -514,16 +553,33 @@ app.on("invoke", async (context) => {
 
           const passwordValue = generatePassword ? '$GEN' : (recordPassword?.trim() || null);
 
-          const result = await keeperClient.createRecord({
+          // Detect whether the selected shared folder is a Nested Share Folder (NSF).
+          // Subfolders inherit NSF status from their parent, so we check the
+          // top-level folder selection against the share-report choices.
+          let folderIsNsf = false;
+          if (targetFolderUidRaw && String(targetFolderUidRaw).trim() && targetFolderUidRaw !== '_default_') {
+            try {
+              const fr = await keeperClient.getSharedFolderChoicesForEmail(merged.requesterEmail || '');
+              const match = (fr.choiceSetChoices || []).find((c) => c.value === String(targetFolderUidRaw).trim());
+              folderIsNsf = !!match?.isNsf;
+            } catch (e) {
+              log.debug('NSF folder detection for create-secret failed, defaulting to classic', e.message);
+            }
+          }
+
+          const createArgs = {
             title: recordTitle.trim(),
             ...(loginTrimmed ? { login: loginTrimmed } : {}),
             password: passwordValue,
             url: recordUrl?.trim() || null,
             notes: recordNotes?.trim() || null,
             generatePassword: generatePassword,
-            selfDestructDuration: null,
             folderUid,
-          });
+          };
+
+          const result = folderIsNsf
+            ? await keeperClient.createNsfRecord(createArgs)
+            : await keeperClient.createRecord({ ...createArgs, selfDestructDuration: null });
 
           if (result.success) {
             // Fire-and-forget notification to approvers channel
@@ -584,17 +640,27 @@ app.on("invoke", async (context) => {
         // Mirrors the self-service Create Secret flow's behaviour.
         const approvalPayload = merged;
         const keeperClientForCreate = require('./services/keeperClient');
-        const generatePassword = !recordPassword || recordPassword.trim() === '' || recordPassword === '$GEN';
+        const generatePassword = autoGenChecked
+          || !recordPassword
+          || recordPassword.trim() === ''
+          || recordPassword === '$GEN';
 
-        const result = await keeperClientForCreate.createRecord({
+        const createArgs = {
           title: recordTitle.trim(),
           login: recordLogin.trim(),
           password: generatePassword ? '$GEN' : recordPassword,
           url: recordUrl?.trim() || null,
           notes: recordNotes?.trim() || null,
           generatePassword: generatePassword,
-          selfDestructDuration: selfDestructDuration,
-        });
+          skipUidLookup: true,
+        };
+
+        const result = useClassic
+          ? await keeperClientForCreate.createRecord({
+              ...createArgs,
+              selfDestructDuration: selfDestructDuration,
+            })
+          : await keeperClientForCreate.createNsfRecord(createArgs);
 
         log.debug('Approval-flow record creation complete', result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
 
@@ -614,93 +680,46 @@ app.on("invoke", async (context) => {
           };
         }
 
-        // Success path: build the approval card with permission/duration selectors
-        // and return it inline as the response (replaces the form card in chat).
-        const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('./cards/constants');
+        const isNsfRecord = !useClassic;
 
-        const successBodyElements = [
-          { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
-          { type: 'TextBlock', text: `Requester: ${approvalPayload.requesterName || 'Unknown'}`, wrap: true },
-          { type: 'TextBlock', text: `Justification: ${approvalPayload.justification || 'N/A'}`, wrap: true, isSubtle: true },
-          {
-            type: 'Container',
-            style: 'good',
-            spacing: 'Medium',
-            items: [
-              { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
-              { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
-            ],
-          },
-        ];
-
-        if (selfDestructEnabled) {
-          const durationLabels = { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days' };
-          const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
-          successBodyElements.push({
-            type: 'Container',
-            style: 'attention',
-            spacing: 'Medium',
-            items: [
-              { type: 'TextBlock', text: 'Self-Destruct Enabled', weight: 'Bolder', wrap: true },
-              { type: 'TextBlock', text: `This record will auto-delete after ${durationLabel}`, size: 'Small', wrap: true },
-            ],
-          });
+        if (result.uidUnavailable || !result.recordUid) {
+          const { startPostCreateUidLookup } = require('./handlers/approval/postCreate');
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: startPostCreateUidLookup(context, {
+              approvalId: approvalPayload.approvalId,
+              requesterName: approvalPayload.requesterName,
+              requesterId: approvalPayload.requesterId,
+              requesterEmail: approvalPayload.requesterEmail,
+              requesterAadObjectId: approvalPayload.requesterAadObjectId,
+              justification: approvalPayload.justification,
+              identifier: approvalPayload.identifier,
+              recordTitle: recordTitle.trim(),
+              isNsf: isNsfRecord,
+              selfDestructEnabled,
+              selfDestructDuration: selfDestructDuration || '24h',
+            }),
+          };
         }
-
-        successBodyElements.push(
-          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
-        );
-
-        const successCard = {
-          type: 'AdaptiveCard',
-          '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-          version: '1.5',
-          body: successBodyElements,
-          actions: [
-            {
-              type: 'Action.Execute',
-              title: 'Approve',
-              style: 'positive',
-              verb: 'approve_record',
-              data: {
-                action: 'approve_record',
-                approvalId: approvalPayload.approvalId || '',
-                recordUid: result.recordUid,
-                recordTitle: recordTitle.trim(),
-                requesterId: approvalPayload.requesterId || '',
-                requesterEmail: approvalPayload.requesterEmail || '',
-                requesterName: approvalPayload.requesterName || '',
-                justification: approvalPayload.justification || '',
-                selfDestruct: selfDestructEnabled,
-                selfDestructDuration: selfDestructDuration,
-              },
-            },
-            {
-              type: 'Action.Execute',
-              title: 'Deny',
-              style: 'destructive',
-              verb: 'deny_record',
-              data: {
-                action: 'deny_record',
-                approvalId: approvalPayload.approvalId || '',
-                recordUid: result.recordUid,
-                recordTitle: recordTitle.trim(),
-                requesterId: approvalPayload.requesterId || '',
-                requesterEmail: approvalPayload.requesterEmail || '',
-                requesterName: approvalPayload.requesterName || '',
-                justification: approvalPayload.justification || '',
-              },
-            },
-          ],
-        };
 
         return {
           statusCode: 200,
           type: 'application/vnd.microsoft.card.adaptive',
-          value: successCard,
+          value: cards.buildPostCreateApprovalCard({
+            approvalId: approvalPayload.approvalId,
+            requesterName: approvalPayload.requesterName,
+            requesterId: approvalPayload.requesterId,
+            requesterEmail: approvalPayload.requesterEmail,
+            requesterAadObjectId: approvalPayload.requesterAadObjectId,
+            justification: approvalPayload.justification,
+            identifier: approvalPayload.identifier,
+            recordUid: result.recordUid,
+            recordTitle: recordTitle.trim(),
+            isNsf: isNsfRecord,
+            selfDestructEnabled,
+            selfDestructDuration: selfDestructDuration || '24h',
+          }),
         };
       } catch (error) {
         log.error('Error handling submit_create_record', { message: error.message, stack: error.stack });
@@ -708,6 +727,52 @@ app.on("invoke", async (context) => {
       }
     }
     
+    if (verb === 'refresh_create_form') {
+      try {
+        log.debug('Processing refresh_create_form');
+        const cards = require('./cards');
+
+        const v = activity.value || {};
+        const merged = { ...data, ...(v.action?.data || {}), ...(v.data || {}) };
+        const formField = (key) => (v[key] != null ? v[key] : merged[key]);
+
+        const useClassic = formField('useClassic') === 'true' || formField('useClassic') === true;
+        const selfDestructToggle = formField('selfDestruct') || 'false';
+        const selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
+
+        const refreshedCard = cards.buildRecordCreationCard({
+          approvalId: merged.approvalId,
+          requesterName: merged.requesterName,
+          requesterId: merged.requesterId,
+          requesterEmail: merged.requesterEmail,
+          requesterAadObjectId: merged.requesterAadObjectId,
+          justification: merged.justification,
+          identifier: merged.identifier,
+          originalRecordTitle: merged.originalRecordTitle,
+          searchQuery: merged.searchQuery,
+          createSecretFlow: false,
+          recordTitle: formField('recordTitle') || '',
+          recordLogin: formField('recordLogin') || '',
+          recordPassword: formField('recordPassword') || '',
+          recordUrl: formField('recordUrl') || '',
+          recordNotes: formField('recordNotes') || '',
+          autoGeneratePassword: formField('autoGeneratePassword'),
+          useClassic,
+          selfDestruct: selfDestructEnabled ? 'true' : 'false',
+          selfDestructDuration: formField('selfDestructDuration') || '24h',
+        });
+
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: refreshedCard,
+        };
+      } catch (error) {
+        log.error('Error handling refresh_create_form', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+
     if (verb === 'refresh_shared_folders') {
       try {
         log.debug('Processing refresh_shared_folders');
@@ -867,6 +932,19 @@ app.on("invoke", async (context) => {
           return { statusCode: 400, body: 'Invalid record selection' };
         }
         
+        const rotateOnExpire = activity.value?.action?.data?.rotateOnExpire || 
+                              activity.value?.data?.rotateOnExpire ||
+                              data.rotateOnExpire;
+
+        const nsfRole = activity.value?.action?.data?.nsfRole || 
+                        activity.value?.data?.nsfRole ||
+                        data.nsfRole;
+        // Prefer the NSF flag carried on the selected record; fall back to the
+        // card-level flag from the action data.
+        const isNsf = selectedRecord.isNsf != null
+          ? !!selectedRecord.isNsf
+          : (data.isNsf === true || data.isNsf === 'true');
+
         log.debug('Approving selected record', selectedRecord);
         
         // Build the data for approval
@@ -875,8 +953,12 @@ app.on("invoke", async (context) => {
           action: 'approve_record',
           recordUid: selectedRecord.uid,
           recordTitle: selectedRecord.title,
+          recordType: selectedRecord.recordType,
           permission,
           duration,
+          rotateOnExpire,
+          isNsf,
+          nsfRole,
         };
         
         // Call the existing approval handler
@@ -940,6 +1022,19 @@ app.on("invoke", async (context) => {
           return { statusCode: 400, body: 'Invalid folder selection' };
         }
         
+        const rotateOnExpire = activity.value?.action?.data?.rotateOnExpire || 
+                              activity.value?.data?.rotateOnExpire ||
+                              data.rotateOnExpire;
+
+        const nsfRole = activity.value?.action?.data?.nsfRole || 
+                        activity.value?.data?.nsfRole ||
+                        data.nsfRole;
+        // Prefer the NSF flag carried on the selected folder; fall back to the
+        // card-level flag from the action data.
+        const isNsf = selectedFolder.isNsf != null
+          ? !!selectedFolder.isNsf
+          : (data.isNsf === true || data.isNsf === 'true');
+
         log.debug('Approving selected folder', selectedFolder);
         
         // Build the data for approval
@@ -950,6 +1045,9 @@ app.on("invoke", async (context) => {
           folderName: selectedFolder.name,
           permission,
           duration,
+          rotateOnExpire,
+          isNsf,
+          nsfRole,
         };
         
         // Call the existing approval handler
@@ -1063,6 +1161,17 @@ app.on("invoke", async (context) => {
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
       try {
         log.debug(`Processing ${action} from adaptiveCard/action (Universal Action)`);
+
+        const v = activity.value || {};
+        const mergedApprovalData = {
+          ...data,
+          permission: v.permission || data.permission,
+          duration: v.duration || data.duration,
+          nsfRole: v.nsfRole || data.nsfRole,
+          rotateOnExpire: v.rotateOnExpire ?? data.rotateOnExpire,
+          selfDestruct: data.selfDestruct,
+          selfDestructDuration: data.selfDestructDuration,
+        };
         
         if (action.includes('pedm')) {
           const resultCard = await handlers.routePedmAction(context, data);
@@ -1090,7 +1199,7 @@ app.on("invoke", async (context) => {
           return { statusCode: 200 };
         }
         
-        const result = await handlers.routeApprovalActionWithCardResponse(context, data);
+        const result = await handlers.routeApprovalActionWithCardResponse(context, mergedApprovalData);
         
         log.debug(`Action ${action} completed`, { hasCard: !!result?.updatedCard, hasError: !!result?.error });
         

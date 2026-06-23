@@ -276,13 +276,52 @@ function getApprovalStatus(approvalId) {
   return approvalStatusMap.get(approvalId) || null;
 }
 
+/** Statuses that mean approve/deny is complete — post-create lookup states are excluded. */
+const TERMINAL_APPROVAL_STATUSES = new Set(['approved', 'denied', 'invitation_sent']);
+
+/**
+ * True when status represents a finished approval action (not post-create lookup).
+ * @param {Object|null|undefined} statusData
+ * @returns {boolean}
+ */
+function isTerminalApprovalStatus(statusData) {
+  if (!statusData) return false;
+  if (statusData.type === 'post_create') return false;
+  return TERMINAL_APPROVAL_STATUSES.has(statusData.status);
+}
+
+/**
+ * Return stored status only if the approval is terminally processed.
+ * @param {string} approvalId
+ * @returns {Object|null}
+ */
+function getTerminalApprovalStatus(approvalId) {
+  const status = approvalStatusMap.get(approvalId);
+  return isTerminalApprovalStatus(status) ? status : null;
+}
+
+/**
+ * UI label/color for an already-processed approval card.
+ * @param {Object} statusData
+ * @returns {{ label: string, color: string }}
+ */
+function formatTerminalApprovalStatusDisplay(statusData) {
+  if (statusData?.status === 'denied') {
+    return { label: 'DENIED', color: 'Attention' };
+  }
+  if (statusData?.status === 'invitation_sent') {
+    return { label: 'APPROVED (INVITATION SENT)', color: 'Good' };
+  }
+  return { label: 'APPROVED', color: 'Good' };
+}
+
 /**
  * Check if an approval has been processed
  * @param {string} approvalId - The approval request ID
  * @returns {boolean}
  */
 function isApprovalProcessed(approvalId) {
-  return approvalStatusMap.has(approvalId);
+  return isTerminalApprovalStatus(approvalStatusMap.get(approvalId));
 }
 
 /**
@@ -788,5 +827,8 @@ module.exports = {
   // Approval status storage for refresh mechanism
   storeApprovalStatus,
   getApprovalStatus,
+  getTerminalApprovalStatus,
+  isTerminalApprovalStatus,
+  formatTerminalApprovalStatusDisplay,
   isApprovalProcessed,
 };

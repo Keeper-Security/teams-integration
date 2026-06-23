@@ -3,7 +3,8 @@
  * Cards for record access requests, search results, and confirmations
  */
 
-const { RECORD_PERMISSIONS, DURATION_OPTIONS, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { RECORD_PERMISSIONS, NSF_PERMISSIONS, NSF_RECORD_PERMISSIONS, NSF_ROLE_LABELS, DURATION_OPTIONS, DURATION_OPTIONS_NO_PERMANENT, SELF_DESTRUCT_DURATION_OPTIONS, DEFAULT_DURATION } = require('../constants');
+const { isPamUserRecordType } = require('../../utils/helpers');
 const { 
   buildSearchCardHeader, 
   buildCreateSecretHeader,
@@ -28,6 +29,8 @@ function buildRecordApprovalCard({
   justification,
   isUid = true,
   identifier,
+  errorBanner,
+  isNsf = false,
 }) {
   const requestedTime = getCurrentTimestamp();
   
@@ -40,6 +43,15 @@ function buildRecordApprovalCard({
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
     body: [
+      ...(errorBanner ? [{
+        type: 'Container',
+        style: 'attention',
+        bleed: true,
+        spacing: 'None',
+        items: [
+          { type: 'TextBlock', text: `⚠ ${errorBanner}`, wrap: true, weight: 'Bolder', color: 'Attention' },
+        ],
+      }] : []),
       { type: 'TextBlock', text: 'Record Access Request', weight: 'Bolder', size: 'ExtraLarge' },
       {
         type: 'ColumnSet',
@@ -92,6 +104,7 @@ function buildRecordApprovalCard({
           justification,
           identifier,
           isUid,
+          isNsf,
         },
       },
     };
@@ -110,13 +123,33 @@ function buildRecordApprovalCard({
     }
     
     // Permission/duration selectors
-    card.body.push(
-      { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-      { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-      { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: DURATION_OPTIONS },
-      { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
-    );
+    const isPamUser = !isNsf && isPamUserRecordType(recordType);
+    const durationChoices = isPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
+    if (isNsf) {
+      card.body.push(
+        { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
+        { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+      );
+    } else {
+      card.body.push(
+        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+        { type: 'Input.ChoiceSet', id: 'duration', value: DEFAULT_DURATION, choices: durationChoices },
+        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+      );
+    }
+
+    if (isPamUser) {
+      card.body.push(
+        { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+        { type: 'TextBlock', text: 'If rotation is configured on the record, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+      );
+    }
     
     card.actions = [
       {
@@ -124,7 +157,7 @@ function buildRecordApprovalCard({
         title: 'Approve',
         style: 'positive',
         verb: 'approve_record',
-        data: { action: 'approve_record', approvalId, recordUid, recordTitle, requesterId, requesterEmail, requesterName },
+        data: { action: 'approve_record', approvalId, recordUid, recordTitle, requesterId, requesterEmail, requesterName, isPamUser, isNsf },
       },
       {
         type: 'Action.Execute',
@@ -184,6 +217,7 @@ function buildRecordSearchResultsCard({
   foundRecords,
   noResults = false,
   originalRecordTitle,
+  isNsf = false,
 }) {
   const headerElements = buildSearchCardHeader('Record Access Request', requesterName, approvalId, justification);
   
@@ -229,26 +263,53 @@ function buildRecordSearchResultsCard({
     
     if (recordCount === 1) {
       const record = foundRecords[0];
+      const recordIsNsf = record.isNsf != null ? !!record.isNsf : !!isNsf;
+      const isPamUser = !recordIsNsf && isPamUserRecordType(record.recordType);
+      const durationChoices = isPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
+
       card.body.push(
         { type: 'Container', style: 'good', spacing: 'Medium', items: [
           { type: 'TextBlock', text: `Record Found: ${record.title}`, wrap: true, weight: 'Bolder' },
           { type: 'TextBlock', text: `UID: ${record.uid}`, size: 'Small', isSubtle: true },
-        ]},
-        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
-        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        ]}
       );
+
+      if (recordIsNsf) {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      } else {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      }
+
+      if (isPamUser) {
+        card.body.push(
+          { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+          { type: 'TextBlock', text: 'If rotation is configured on the record, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+        );
+      }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Approve', style: 'positive', verb: 'approve_record', data: { action: 'approve_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification, isPamUser, isNsf: recordIsNsf } },
         { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: 'Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: record.uid, recordTitle: record.title, requesterId, requesterEmail, requesterName, justification } },
       ];
     } else {
-      const recordChoices = foundRecords.map(r => ({ title: `${r.title} (${r.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: r.uid, title: r.title }) }));
+      const recordChoices = foundRecords.map(r => ({ title: `${r.title} (${r.uid.substring(0, 8)}...)`, value: JSON.stringify({ uid: r.uid, title: r.title, recordType: r.recordType, isNsf: !!r.isNsf }) }));
+      const allNsf = foundRecords.length > 0 && foundRecords.every(r => r.isNsf);
+      const anyPamUser = !allNsf && foundRecords.some(r => isPamUserRecordType(r.recordType));
+      const durationChoices = anyPamUser ? DURATION_OPTIONS_NO_PERMANENT : DURATION_OPTIONS;
       
       card.body.push(
         { type: 'Container', style: 'good', spacing: 'Medium', items: [
@@ -256,16 +317,36 @@ function buildRecordSearchResultsCard({
           { type: 'TextBlock', text: 'Select the correct record from the list below:', size: 'Small', isSubtle: true },
         ]},
         { type: 'TextBlock', text: 'Select Record', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'selectedRecord', value: recordChoices[0].value, choices: recordChoices, style: 'expanded' },
-        { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-        { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-        { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
-        { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        { type: 'Input.ChoiceSet', id: 'selectedRecord', value: recordChoices[0].value, choices: recordChoices, style: 'expanded' }
       );
+
+      if (allNsf) {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      } else {
+        card.body.push(
+          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: durationChoices },
+          { type: 'TextBlock', text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).', wrap: true, isSubtle: true, size: 'Small', spacing: 'Small' }
+        );
+      }
+
+      if (anyPamUser) {
+        card.body.push(
+          { type: 'Input.Toggle', id: 'rotateOnExpire', title: 'Rotate credentials when access expires', value: 'false' },
+          { type: 'TextBlock', text: 'If rotation is configured on the record, credentials will auto-rotate when access expires. Disable if not needed.', wrap: true, isSubtle: true, size: 'Small', spacing: 'None' }
+        );
+      }
       
       card.actions = [
-        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_record', data: { action: 'approve_selected_record', approvalId, requesterId, requesterEmail, requesterName, justification } },
+        { type: 'Action.Execute', title: 'Approve Selected', style: 'positive', verb: 'approve_selected_record', data: { action: 'approve_selected_record', approvalId, requesterId, requesterEmail, requesterName, justification, isNsf: allNsf } },
         { type: 'Action.Execute', title: 'Create New Record', verb: 'show_create_form', data: { action: 'show_create_form', ...baseData, recordTitle: originalRecordTitle, searchQuery: searchQuery || originalRecordTitle } },
         { type: 'Action.Execute', title: '↩️ Reset', verb: 'reset_record_card', data: { action: 'reset_record_card', ...baseData, recordTitle: originalRecordTitle } },
         { type: 'Action.Execute', title: 'Deny Request', style: 'destructive', verb: 'deny_record', data: { action: 'deny_record', approvalId, recordUid: null, recordTitle: originalRecordTitle, requesterId, requesterEmail, requesterName, justification } },
@@ -292,6 +373,10 @@ function buildRecordApprovalCardWithStatus({
   duration,
   expiresAt,
   processedTime,
+  rotateOnExpire = false,
+  isNsf = false,
+  selfDestruct = false,
+  selfDestructDuration = null,
 }) {
   let statusText;
   let containerStyle;
@@ -366,11 +451,24 @@ function buildRecordApprovalCardWithStatus({
     }
     
     if (permission) {
+      const permLabel = isNsf
+        ? (NSF_ROLE_LABELS[permission] || permission)
+        : formatPermissionLabel(permission);
       detailsItems.push({
         type: 'ColumnSet',
         columns: [
-          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
-          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatPermissionLabel(permission), size: 'Small' }] },
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: isNsf ? 'Nested Share Role:' : 'Permission:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: permLabel, size: 'Small' }] },
+        ],
+      });
+    }
+
+    if (isNsf) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Folder Type:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: 'Nested Share', size: 'Small', color: 'Accent' }] },
         ],
       });
     }
@@ -401,6 +499,31 @@ function buildRecordApprovalCardWithStatus({
         columns: [
           { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Expires:', weight: 'Bolder', size: 'Small' }] },
           { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: expiresAt, size: 'Small' }] },
+        ],
+      });
+    }
+
+    if (rotateOnExpire) {
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Credential Rotation:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: 'Enabled on expiry', size: 'Small', color: 'Good' }] },
+        ],
+      });
+    }
+
+    if (selfDestruct) {
+      const sdLabels = {
+        '5m': '5 minutes', '10m': '10 minutes', '15m': '15 minutes', '30m': '30 minutes',
+        '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days',
+      };
+      const sdLabel = sdLabels[selfDestructDuration] || selfDestructDuration || 'configured period';
+      detailsItems.push({
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Self-Destruct:', weight: 'Bolder', size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: `Record auto-deletes after ${sdLabel}`, size: 'Small', color: 'Attention', wrap: true }] },
         ],
       });
     }
@@ -585,7 +708,15 @@ function buildRecordCreationCard({
   recordPassword: prevRecordPassword,
   recordUrl: prevRecordUrl,
   recordNotes: prevRecordNotes,
+  autoGeneratePassword: prevAutoGeneratePassword,
+  /** Approval flow only: checked = Classic record (record-add); unchecked = NSF (nsf-record-add). */
+  useClassic: prevUseClassic = false,
+  selfDestruct: prevSelfDestruct = false,
+  selfDestructDuration: prevSelfDestructDuration = DEFAULT_DURATION,
 }) {
+  const useClassicEnabled = prevUseClassic === true || prevUseClassic === 'true';
+  const selfDestructEnabled = prevSelfDestruct === true || prevSelfDestruct === 'true';
+
   const headerElements = createSecretFlow
     ? buildCreateSecretHeader(requesterName || 'Unknown', requesterEmail || '')
     : buildSearchCardHeader('Create New Record', requesterName || 'Unknown', approvalId || 'N/A', justification || '');
@@ -604,7 +735,7 @@ function buildRecordCreationCard({
   
   const introText = createSecretFlow
     ? 'Record title is required. Leave password empty to auto-generate one.'
-    : 'Create a new record to share with the requester:';
+    : 'Create a new record to share with the requester. Use auto-generate for a Keeper-compliant password, or enter one manually.';
 
   const secretFormLocked = createSecretFlow && noSharedFoldersForUser;
   const inputEnabled = !secretFormLocked;
@@ -622,6 +753,50 @@ function buildRecordCreationCard({
     });
   } else {
     bodyElements.push({ type: 'TextBlock', text: introText, wrap: true, spacing: 'Medium' });
+    // Approval create-record only — create-secret infers Classic vs NSF from the selected folder.
+    if (!createSecretFlow) {
+      bodyElements.push(
+        { type: 'TextBlock', text: 'Vault Type', weight: 'Bolder', spacing: 'Medium' },
+        {
+          type: 'Input.Toggle',
+          id: 'useClassic',
+          title: 'Use Classic permission model',
+          value: useClassicEnabled ? 'true' : 'false',
+        },
+      );
+      if (!useClassicEnabled) {
+        bodyElements.push({
+          type: 'TextBlock',
+          text: 'Unchecked = Nested Share Folder record (role-based sharing). Self-destruct is Classic-only.',
+          wrap: true,
+          isSubtle: true,
+          size: 'Small',
+          spacing: 'Small',
+        });
+      }
+      bodyElements.push({
+        type: 'TextBlock',
+        text: useClassicEnabled
+          ? 'Classic vault type selected. Self-destruct options are shown below when enabled.'
+          : 'After changing vault type, click Update options to show Classic-only settings.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'Small',
+      });
+      bodyElements.push({
+        type: 'ActionSet',
+        spacing: 'Small',
+        actions: [
+          {
+            type: 'Action.Execute',
+            title: '\uD83D\uDD04 Update options',
+            verb: 'refresh_create_form',
+            data: { action: 'refresh_create_form', ...baseData },
+          },
+        ],
+      });
+    }
   }
   
   // Show validation error if present
@@ -779,24 +954,22 @@ function buildRecordCreationCard({
       value: prevRecordPassword || '',
       ...(createSecretFlow ? { isEnabled: inputEnabled } : {}),
     },
-    ...(createSecretFlow ? [
-      {
-        type: 'TextBlock',
-        text: '\uD83D\uDD12 Auto-generate passwords to keep them fully private. Generated passwords stay in your Keeper Vault (zero-knowledge), while manually entered passwords pass through Teams.',
-        wrap: true,
-        isSubtle: true,
-        size: 'Small',
-        spacing: 'None',
-        color: 'Warning',
-      },
-      {
-        type: 'Input.Toggle',
-        id: 'autoGeneratePassword',
-        title: 'Auto-generate a strong password',
-        value: 'false',
-        ...(inputEnabled ? {} : { isEnabled: false }),
-      },
-    ] : []),
+    {
+      type: 'TextBlock',
+      text: '\uD83D\uDD12 Auto-generate passwords to keep them fully private. Generated passwords stay in your Keeper Vault (zero-knowledge), while manually entered passwords pass through Teams.',
+      wrap: true,
+      isSubtle: true,
+      size: 'Small',
+      spacing: 'None',
+      color: 'Warning',
+    },
+    {
+      type: 'Input.Toggle',
+      id: 'autoGeneratePassword',
+      title: 'Auto-generate a strong password',
+      value: prevAutoGeneratePassword === true || prevAutoGeneratePassword === 'true' ? 'true' : 'false',
+      ...(createSecretFlow && !inputEnabled ? { isEnabled: false } : {}),
+    },
     { type: 'TextBlock', text: createSecretFlow ? 'URL' : 'URL (optional)', weight: 'Bolder', spacing: 'Small' },
     {
       type: 'Input.Text',
@@ -816,14 +989,15 @@ function buildRecordCreationCard({
     },
   );
 
-  if (!createSecretFlow) {
+  // Self-destruct is Classic-only (mirrors slack-app create-record modal).
+  if (!createSecretFlow && useClassicEnabled) {
     bodyElements.push(
       { type: 'TextBlock', text: '─────────────────────────────', isSubtle: true, spacing: 'Medium' },
       { type: 'TextBlock', text: 'Self-Destruct Options', weight: 'Bolder', size: 'Medium', spacing: 'Small' },
       { type: 'TextBlock', text: 'Enable this to automatically delete the record after a set time period.', size: 'Small', isSubtle: true, wrap: true },
-      { type: 'Input.Toggle', id: 'selfDestruct', title: 'Enable Self-Destruct', value: 'false' },
+      { type: 'Input.Toggle', id: 'selfDestruct', title: 'Enable Self-Destruct', value: selfDestructEnabled ? 'true' : 'false' },
       { type: 'TextBlock', text: 'Delete After (only applies if self-destruct is enabled)', weight: 'Bolder', spacing: 'Small' },
-      { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: DEFAULT_DURATION, choices: SELF_DESTRUCT_DURATION_OPTIONS },
+      { type: 'Input.ChoiceSet', id: 'selfDestructDuration', value: prevSelfDestructDuration || DEFAULT_DURATION, choices: SELF_DESTRUCT_DURATION_OPTIONS },
       { type: 'TextBlock', text: 'This duration is ignored if self-destruct is not enabled above.', size: 'Small', isSubtle: true, wrap: true, color: 'Attention' },
     );
   }
@@ -844,13 +1018,269 @@ function buildRecordCreationCard({
       },
       {
         type: 'Action.Execute',
-        title: 'Cancel',
+        title: createSecretFlow ? 'Cancel' : 'Back to Request',
         verb: createSecretFlow ? 'cancel_create_secret' : 'cancel_create_form',
         isEnabled: true,
         associatedInputs: 'none',
         data: createSecretFlow
           ? { action: 'cancel_create_secret', ...baseData }
           : { action: 'cancel_create_form', ...baseData, searchQuery },
+      },
+    ],
+  };
+}
+
+/**
+ * Build the post-create approval card shown after an approver creates a record
+ * in the approval channel. Mirrors slack-app: return to approval UI with the
+ * new record pre-selected so the approver can grant access to the requester.
+ */
+function buildPostCreateApprovalCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  recordUid,
+  recordTitle,
+  isNsf = false,
+  selfDestructEnabled = false,
+  selfDestructDuration = '24h',
+}) {
+  const safeRecordTitle = recordTitle || 'New Record';
+  const safeRecordUid = recordUid || '';
+  const durationLabels = {
+    '5m': '5 minutes', '10m': '10 minutes', '15m': '15 minutes', '30m': '30 minutes',
+    '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days',
+  };
+
+  const body = [
+    { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large', color: 'Good' },
+    { type: 'TextBlock', text: `Requester: ${requesterName || 'Unknown'}`, wrap: true },
+    { type: 'TextBlock', text: `Justification: ${justification || 'N/A'}`, wrap: true, isSubtle: true },
+    {
+      type: 'Container',
+      style: 'good',
+      spacing: 'Medium',
+      items: [
+        { type: 'TextBlock', text: `Record: ${safeRecordTitle}`, wrap: true, weight: 'Bolder' },
+        ...(safeRecordUid ? [{ type: 'TextBlock', text: `UID: ${safeRecordUid}`, size: 'Small', isSubtle: true }] : []),
+        ...(isNsf ? [{ type: 'TextBlock', text: 'Type: Nested Share', size: 'Small', color: 'Accent' }] : []),
+      ],
+    },
+    { type: 'TextBlock', text: 'Review and approve access for the requester:', wrap: true, spacing: 'Medium' },
+  ];
+
+  if (selfDestructEnabled) {
+    const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
+    body.push({
+      type: 'Container',
+      style: 'attention',
+      spacing: 'Medium',
+      items: [
+        { type: 'TextBlock', text: 'Self-Destruct Record', weight: 'Bolder', wrap: true },
+        {
+          type: 'TextBlock',
+          text: `Approving will grant view-only access to the requester. The record will auto-delete after ${durationLabel}.`,
+          wrap: true,
+          size: 'Small',
+        },
+      ],
+    });
+  } else if (isNsf) {
+    body.push(
+      { type: 'TextBlock', text: 'Nested Share Role', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+      { type: 'Input.ChoiceSet', id: 'nsfRole', value: 'viewer', choices: NSF_RECORD_PERMISSIONS },
+      {
+        type: 'TextBlock',
+        text: 'Nested Share roles range from Viewer (read-only) to Full Manager. Transfer Ownership grants permanent ownership (duration is ignored). Choose Permanent for non-expiring access.',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'Small',
+      },
+      { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+      { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+    );
+  } else {
+    body.push(
+      { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+      { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
+      { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
+      { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS },
+      {
+        type: 'TextBlock',
+        text: 'Note: Can Share, Edit & Share, and Change Owner permissions grant permanent access (duration will be ignored).',
+        wrap: true,
+        isSubtle: true,
+        size: 'Small',
+        spacing: 'Small',
+      },
+    );
+  }
+
+  const approveData = {
+    action: 'approve_record',
+    approvalId: approvalId || '',
+    recordUid: safeRecordUid,
+    recordTitle: safeRecordTitle,
+    requesterId: requesterId || '',
+    requesterEmail: requesterEmail || '',
+    requesterName: requesterName || '',
+    justification: justification || '',
+    identifier: identifier || safeRecordTitle,
+    isNsf: !!isNsf,
+    selfDestruct: !!selfDestructEnabled,
+    selfDestructDuration: selfDestructEnabled ? selfDestructDuration : undefined,
+  };
+
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.5',
+    body,
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Approve',
+        style: 'positive',
+        verb: 'approve_record',
+        data: approveData,
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Deny',
+        style: 'destructive',
+        verb: 'deny_record',
+        data: {
+          action: 'deny_record',
+          approvalId: approvalId || '',
+          recordUid: safeRecordUid,
+          recordTitle: safeRecordTitle,
+          requesterId: requesterId || '',
+          requesterEmail: requesterEmail || '',
+          requesterName: requesterName || '',
+          justification: justification || '',
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Build a card while the app searches for the newly created record UID.
+ */
+function buildPostCreateUidResolvingCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  recordTitle,
+  isNsf = false,
+}) {
+  const createdTitle = recordTitle || 'New Record';
+  const card = {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.5',
+    body: [
+      { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large', color: 'Good' },
+      { type: 'TextBlock', text: `Record: ${createdTitle}`, wrap: true, weight: 'Bolder' },
+      {
+        type: 'Container',
+        style: 'emphasis',
+        spacing: 'Medium',
+        items: [
+          { type: 'TextBlock', text: 'Looking up record UID...', weight: 'Bolder', horizontalAlignment: 'Center' },
+          {
+            type: 'TextBlock',
+            text: isNsf
+              ? 'Searching for the new Nested Share record. This may take a few seconds.'
+              : 'Searching for the new record. This may take a few seconds.',
+            wrap: true,
+            isSubtle: true,
+            horizontalAlignment: 'Center',
+            size: 'Small',
+          },
+        ],
+      },
+    ],
+    actions: [],
+  };
+
+  card.refresh = {
+    action: {
+      type: 'Action.Execute',
+      verb: 'refreshPostCreateCard',
+      data: {
+        approvalId: approvalId || '',
+        requesterName: requesterName || '',
+        requesterId: requesterId || '',
+        requesterEmail: requesterEmail || '',
+        requesterAadObjectId: requesterAadObjectId || '',
+        justification: justification || '',
+        identifier: identifier || createdTitle,
+        recordTitle: createdTitle,
+        isNsf,
+      },
+    },
+  };
+
+  return card;
+}
+
+/**
+ * Build a card when the record was created but UID is not yet available.
+ */
+function buildPostCreateUidPendingCard({
+  approvalId,
+  requesterName,
+  requesterId,
+  requesterEmail,
+  requesterAadObjectId,
+  justification,
+  identifier,
+  recordTitle,
+}) {
+  const createdTitle = recordTitle || 'New Record';
+  return {
+    type: 'AdaptiveCard',
+    '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.5',
+    body: [
+      { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large', color: 'Good' },
+      { type: 'TextBlock', text: `Record: ${createdTitle}`, wrap: true, weight: 'Bolder' },
+      {
+        type: 'TextBlock',
+        text: 'Keeper confirmed the record was created, but the new UID was not returned immediately. Search for the created record below to continue the approval.',
+        wrap: true,
+        isSubtle: true,
+      },
+      { type: 'Input.Text', id: 'searchQuery', placeholder: 'Search for the created record...', value: createdTitle },
+    ],
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Search Created Record',
+        style: 'positive',
+        verb: 'lookup_record',
+        data: {
+          action: 'lookup_record',
+          approvalId: approvalId || '',
+          identifier: identifier || createdTitle,
+          recordTitle: createdTitle,
+          requesterId: requesterId || '',
+          requesterEmail: requesterEmail || '',
+          requesterAadObjectId: requesterAadObjectId || '',
+          requesterName: requesterName || '',
+          justification: justification || '',
+          searchQuery: createdTitle,
+        },
       },
     ],
   };
@@ -1167,15 +1597,20 @@ function buildRecordProcessingCard({
   requesterName,
   requesterEmail,
   recordTitle,
+  recordUid,
   justification,
   permission,
   duration,
   approverName,
   processedTime,
+  isNsf = false,
 }) {
   const time = processedTime || getCurrentTimestamp();
+  const permLabel = isNsf
+    ? (NSF_ROLE_LABELS[permission] || permission)
+    : formatPermissionLabel(permission);
   
-  return {
+  const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
@@ -1220,7 +1655,7 @@ function buildRecordProcessingCard({
         spacing: 'Medium',
         columns: [
           { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
-          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatPermissionLabel(permission), size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: permLabel, size: 'Small' }] },
         ],
       },
       {
@@ -1240,6 +1675,25 @@ function buildRecordProcessingCard({
     ],
     actions: [],
   };
+
+  card.refresh = {
+    action: {
+      type: 'Action.Execute',
+      verb: 'refreshApprovalCard',
+      data: {
+        approvalId,
+        type: 'record',
+        requesterName,
+        requesterEmail,
+        recordTitle,
+        recordUid,
+        justification,
+        isNsf,
+      },
+    },
+  };
+
+  return card;
 }
 
 module.exports = {
@@ -1249,6 +1703,9 @@ module.exports = {
   buildRecordConfirmationCard,
   buildRecordCreationCard,
   buildCreateSecretSuccessCard,
+  buildPostCreateApprovalCard,
+  buildPostCreateUidResolvingCard,
+  buildPostCreateUidPendingCard,
   buildRecordCreatedCard,
   buildRecordInvitationSentCard,
   buildRecordAlreadyHasAccessCard,

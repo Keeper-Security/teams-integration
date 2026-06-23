@@ -92,6 +92,127 @@ function isPamRecordError(errorMessage) {
 }
 
 /**
+ * Check if a record type is a PAM User record (eligible for rotate-on-expire).
+ * @param {string} recordType - Record type string from Keeper
+ * @returns {boolean}
+ */
+function isPamUserRecordType(recordType) {
+  if (!recordType || typeof recordType !== 'string') return false;
+  return recordType.toLowerCase().startsWith('pamuser');
+}
+
+/**
+ * Check if rotation-not-configured error was returned by Commander.
+ * @param {string} errorMessage - Error message from Keeper
+ * @returns {boolean}
+ */
+function isRotationNotConfiguredError(errorMessage) {
+  if (!errorMessage || typeof errorMessage !== 'string') return false;
+  const lower = errorMessage.toLowerCase();
+  return (
+    lower.includes('rotation must be already set') ||
+    (lower.includes('rotate') && lower.includes('expiration') && lower.includes('set on the record')) ||
+    (lower.includes('--rotate-on-expiration') && (lower.includes('requires') || lower.includes('ineligible')))
+  );
+}
+
+/**
+ * Nested Share Folder (NSF) permission roles, in order of increasing privilege.
+ * Shared by nsf-share-record and nsf-share-folder commands.
+ */
+const NSF_ROLES = ['viewer', 'share-manager', 'content-manager', 'content-share-manager', 'full-manager'];
+
+/**
+ * Check if a Keeper folder/record "type" string denotes a Nested Share Folder item.
+ * Commander reports NSF items with a type containing "nested share".
+ * @param {string} type - Type string from Keeper (e.g. 'nested share folder')
+ * @returns {boolean}
+ */
+function isNsfType(type) {
+  if (!type || typeof type !== 'string') return false;
+  // Commander reports NSF folders in several string forms depending on the
+  // command: `search` returns "nested_share_folder" (underscores), the
+  // share-report Type column returns "Nested Share Folder" (spaces), and
+  // subfolder listings embed "[Nested Share Folder]" in the name. Normalize
+  // underscores to spaces so every variant is detected.
+  return type.toLowerCase().replace(/_/g, ' ').includes('nested share');
+}
+
+/**
+ * Validate an NSF permission role against the allowed set.
+ * @param {string} role - Role string (e.g. 'viewer', 'full-manager')
+ * @returns {boolean}
+ */
+function isValidNsfRole(role) {
+  return typeof role === 'string' && NSF_ROLES.includes(role);
+}
+
+/**
+ * Check whether a record's "Record Category" denotes a Nested Share Folder
+ * record. Commander surfaces this in the search `details` string as e.g.
+ * "Record Category: Nested". Unlike folders, NSF records keep their normal
+ * record type (e.g. "login"), so the category is the reliable NSF signal.
+ * @param {string} category - Category string from the record details
+ * @returns {boolean}
+ */
+function isNsfRecordCategory(category) {
+  if (!category || typeof category !== 'string') return false;
+  const c = category.trim().toLowerCase();
+  return c === 'nested' || c === 'keeperdrive';
+}
+
+/**
+ * Convert a Date, epoch (ms), or date string into a strict RFC 3339 UTC string
+ * (e.g. "2026-06-11T07:51:47Z") suitable for Adaptive Card DATE()/TIME() functions.
+ * Legacy "YYYY-MM-DD HH:MM:SS" strings are interpreted as UTC.
+ * @param {Date|number|string} input
+ * @returns {string|null} RFC 3339 UTC string, or null if unparseable
+ */
+function toRfc3339Utc(input) {
+  let date;
+  if (input instanceof Date) {
+    date = input;
+  } else if (typeof input === 'number') {
+    date = new Date(input);
+  } else if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+      // Legacy UTC timestamp without timezone marker.
+      date = new Date(`${trimmed.replace(' ', 'T')}Z`);
+    } else {
+      date = new Date(trimmed);
+    }
+  } else {
+    return null;
+  }
+  if (!date || isNaN(date.getTime())) return null;
+  // Adaptive Cards expects no milliseconds (e.g. "...:47Z").
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Format a timestamp for display in an Adaptive Card using Teams' native
+ * DATE()/TIME() functions, so each viewer sees the value in THEIR OWN local
+ * timezone. Server-side formatting cannot know the viewer's timezone, so this
+ * is the only reliable way to localize times per recipient.
+ *
+ * Example: "{{DATE(2026-06-11T07:51:47Z, SHORT)}} {{TIME(2026-06-11T07:51:47Z)}}"
+ *
+ * @param {Date|number|string} input - Date/epoch/ISO string (assumed UTC if no tz)
+ * @param {object} [options]
+ * @param {string} [options.dateFormat='SHORT'] - COMPACT | SHORT | LONG
+ * @param {boolean} [options.includeTime=true] - Whether to append the TIME() token
+ * @returns {string} Adaptive Card token string, or the original input if unparseable
+ */
+function formatCardDateTime(input, options = {}) {
+  const { dateFormat = 'SHORT', includeTime = true } = options;
+  const iso = toRfc3339Utc(input);
+  if (!iso) return typeof input === 'string' ? input : '';
+  const datePart = `{{DATE(${iso}, ${dateFormat})}}`;
+  return includeTime ? `${datePart} {{TIME(${iso})}}` : datePart;
+}
+
+/**
  * Sanitize text to prevent URL injection attacks.
  * Removes colons and forward slashes that could create clickable hyperlinks in Teams.
  * Used for UIDs and justification text displayed in cards.
@@ -115,5 +236,13 @@ module.exports = {
   isPermissionConflictError,
   isRecordOwnerError,
   isPamRecordError,
+  isPamUserRecordType,
+  isRotationNotConfiguredError,
+  NSF_ROLES,
+  isNsfType,
+  isValidNsfRole,
+  isNsfRecordCategory,
+  toRfc3339Utc,
+  formatCardDateTime,
   sanitizeHyperlinks,
 };

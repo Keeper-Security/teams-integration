@@ -39,6 +39,20 @@ async function handleRefreshApprovalCard(data) {
   log.debug(`Approval ${approvalId} has status: ${status.status}`);
   
   if (type === 'record') {
+    if (status.status === 'invitation_sent') {
+      return cards.buildRecordInvitationSentCard({
+        approvalId,
+        requesterName: status.requesterName || data.requesterName,
+        requesterEmail: status.requesterEmail || data.requesterEmail,
+        recordTitle: status.recordTitle || data.recordTitle,
+        recordUid: status.recordUid || data.recordUid,
+        justification: status.justification || data.justification,
+        permission: status.permission,
+        approverName: status.approverName,
+        processedTime: status.processedTime,
+      });
+    }
+
     return cards.buildRecordApprovalCardWithStatus({
       approvalId: approvalId,
       requesterName: status.requesterName || data.requesterName,
@@ -51,8 +65,25 @@ async function handleRefreshApprovalCard(data) {
       duration: status.duration,
       expiresAt: status.expiresAt,
       processedTime: status.processedTime,
+      isNsf: status.isNsf,
+      selfDestruct: status.selfDestruct,
+      selfDestructDuration: status.selfDestructDuration,
     });
   } else if (type === 'folder') {
+    if (status.status === 'invitation_sent') {
+      return cards.buildFolderInvitationSentCard({
+        approvalId,
+        requesterName: status.requesterName || data.requesterName,
+        requesterEmail: status.requesterEmail || data.requesterEmail,
+        folderName: status.folderName || data.folderName,
+        folderUid: status.folderUid || data.folderUid,
+        justification: status.justification || data.justification,
+        permission: status.permission,
+        approverName: status.approverName,
+        processedTime: status.processedTime,
+      });
+    }
+
     return cards.buildFolderApprovalCardWithStatus({
       approvalId: approvalId,
       requesterName: status.requesterName || data.requesterName,
@@ -65,6 +96,7 @@ async function handleRefreshApprovalCard(data) {
       duration: status.duration,
       expiresAt: status.expiresAt,
       processedTime: status.processedTime,
+      isNsf: status.isNsf,
     });
   }
   
@@ -212,7 +244,20 @@ async function handleInlineLookup(verb, data, searchQuery) {
       const foundFolders = results.map(f => ({
         uid: f.uid || f.folder_uid,
         name: f.name || f.title || f.uid,
+        isNsf: !!f.isNsf,
       }));
+
+      const allNsf = foundFolders.length > 0 && foundFolders.every(f => f.isNsf);
+
+      // PAM eligibility only applies to classic (non-NSF) folders.
+      let isPamFolder = false;
+      if (foundFolders.length > 0 && !allNsf) {
+        try {
+          isPamFolder = await keeperClient.isPamUserFolder(foundFolders[0].uid);
+        } catch (e) {
+          log.debug('isPamUserFolder check failed, defaulting to false', e.message);
+        }
+      }
       
       return cards.buildFolderSearchResultsCard({
         approvalId,
@@ -225,16 +270,22 @@ async function handleInlineLookup(verb, data, searchQuery) {
         searchQuery: query,
         foundFolders,
         originalFolderName: folderName,
+        isPamFolder,
+        isNsf: allNsf,
       });
     } else if (isShare) {
+      // One-Time Shares only work on classic records. Commander's
+      // one-time-share supports neither PAM nor Nested Share Folder (NSF)
+      // records, so filter both out of the OTS search results.
       const pamRecordTypes = ['pamdirectory', 'pamdatabase', 'pammachine', 'pamuser', 'pamremotebrowser'];
       const filteredResults = results.filter(r => {
         const recordType = (r.recordType || r.record_type || '').toLowerCase();
-        return !pamRecordTypes.some(pamType => recordType.includes(pamType));
+        const isPam = pamRecordTypes.some(pamType => recordType.includes(pamType));
+        return !isPam && !r.isNsf;
       });
       
       if (filteredResults.length === 0) {
-        log.debug('All search results were PAM records, showing no results message');
+        log.debug('All search results were PAM/NSF records (ineligible for one-time share), showing no results message');
         return cards.buildShareSearchResultsCard({
           approvalId,
           requesterName,
@@ -271,7 +322,11 @@ async function handleInlineLookup(verb, data, searchQuery) {
       const foundRecords = results.map(r => ({
         uid: r.uid || r.record_uid,
         title: r.title || r.name || r.uid,
+        recordType: r.recordType || r.record_type || 'login',
+        isNsf: !!r.isNsf,
       }));
+
+      const allNsf = foundRecords.length > 0 && foundRecords.every(r => r.isNsf);
       
       return cards.buildRecordSearchResultsCard({
         approvalId,
@@ -284,6 +339,7 @@ async function handleInlineLookup(verb, data, searchQuery) {
         searchQuery: query,
         foundRecords,
         originalRecordTitle: recordTitle,
+        isNsf: allNsf,
       });
     }
   } catch (error) {
@@ -674,7 +730,7 @@ async function handleCancelCreateForm(data) {
     justification,
     identifier,
     searchQuery: query,
-    records: searchResults,
+    foundRecords: searchResults,
     noResults,
     originalRecordTitle: recordTitle,
   });
