@@ -540,6 +540,7 @@ function buildRequesterNotificationCard({
   itemType = 'record',
   rotateOnExpire = false,
   isNsf = false,
+  selfDestructNote,
 }) {
   const statusText = approved ? 'Your Access Request Has Been Approved!' : 'Your Access Request Has Been Denied';
   const containerStyle = approved ? 'good' : 'attention';
@@ -637,6 +638,13 @@ function buildRequesterNotificationCard({
           isSubtle: true,
           size: 'Small',
         },
+        ...(selfDestructNote ? [{
+          type: 'TextBlock',
+          text: selfDestructNote,
+          wrap: true,
+          color: 'Attention',
+          size: 'Small',
+        }] : []),
       ],
     });
   } else {

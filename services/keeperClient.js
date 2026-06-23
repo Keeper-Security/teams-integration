@@ -165,7 +165,7 @@ class KeeperClient {
 
   async getFolderByUid(folderUid) {
     try {
-      const command = 'search -c s ' + shellEscapeSearch(folderUid) + ' --format=json';
+      const command = 'search -c s,d ' + shellEscapeSearch(folderUid) + ' --format=json';
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
@@ -1128,9 +1128,10 @@ class KeeperClient {
         commandParts.push('--notes ' + shellEscape(notesForCli));
       }
       
-      // Add self-destruct duration if provided
+      // Add self-destruct duration if provided.
       if (selfDestructDuration && selfDestructDuration.trim()) {
-        commandParts.push('--self-destruct ' + selfDestructDuration);
+        const sdValue = this._formatSelfDestructDuration(selfDestructDuration.trim());
+        commandParts.push('--self-destruct ' + sdValue);
       }
       
       // Add login if provided
@@ -1197,46 +1198,20 @@ class KeeperClient {
         };
       }
 
-      log.debug('Record created successfully, searching for UID...');
-
-      const maxRetries = 3;
-      const waitTimes = [2000, 3000, 4000];
-      
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, waitTimes[attempt]));
-        
-        try {
-          const searchCommand = 'search ' + shellEscape(title) + ' --format=json';
-          const searchResult = await this._executeCommandAsync(searchCommand, 10);
-          
-          if (searchResult && searchResult.status === 'success' && searchResult.data) {
-            const data = Array.isArray(searchResult.data) ? searchResult.data : [];
-            
-            if (data.length > 0) {
-              const matchingRecord = data.find(r => r.title === title) || data[0];
-              const uid = matchingRecord.uid || matchingRecord.record_uid;
-              
-              if (uid) {
-                log.info('Found created record UID after attempt ' + (attempt + 1), { recordUid: uid, title });
-                return {
-                  success: true,
-                  recordUid: uid,
-                  title,
-                  generatedPassword: generatePassword || password === '$GEN',
-                  isNewlyCreated: true,
-                  selfDestructUrl: selfDestructDuration ? this._extractUrlFromCreateResult(result) : null,
-                };
-              }
-            }
-          }
-          
-          log.debug('Record not found yet, attempt ' + (attempt + 1) + ' of ' + maxRetries);
-        } catch (searchError) {
-          log.debug('Search error on attempt ' + (attempt + 1), searchError.message);
-        }
+      const resolvedUid = await this.lookupRecordUidAfterCreate(title, { isNsf: false });
+      if (resolvedUid) {
+        log.info('Found created record UID via post-create lookup', { recordUid: resolvedUid, title });
+        return {
+          success: true,
+          recordUid: resolvedUid,
+          title,
+          generatedPassword: generatePassword || password === '$GEN',
+          isNewlyCreated: true,
+          selfDestructUrl: selfDestructDuration ? this._extractUrlFromCreateResult(result) : null,
+        };
       }
-      
-      log.warn('Record created but UID not found after ' + maxRetries + ' attempts');
+
+      log.warn('Record created but UID not found after post-create lookup', { title });
       return {
         success: true,
         recordUid: null,
@@ -1250,6 +1225,70 @@ class KeeperClient {
       log.error('Exception in createRecord', error);
       return { success: false, error: 'Error creating record: ' + error.message };
     }
+  }
+
+  /**
+   * Search for a newly created record's UID with retries.
+   * Used after record-add / nsf-record-add when Commander does not return the UID inline.
+   * @param {string} title - Record title to match
+   * @param {{ isNsf?: boolean }} [options]
+   * @returns {Promise<string|null>}
+   */
+  async lookupRecordUidAfterCreate(title, { isNsf = false } = {}) {
+    if (!title || !String(title).trim()) return null;
+
+    const trimmedTitle = String(title).trim();
+    const maxRetries = 3;
+    const waitTimes = [2000, 3000, 4000];
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, waitTimes[attempt]));
+
+      try {
+        const results = await this.searchRecords(trimmedTitle, 10);
+        if (results?.length > 0) {
+          if (isNsf) {
+            const nsfExact = results.find(r => r.title === trimmedTitle && r.isNsf);
+            const nsfAny = results.find(r => r.isNsf);
+            const uid = (nsfExact || nsfAny)?.uid;
+            if (uid) {
+              log.info('Found NSF record UID via searchRecords', { recordUid: uid, attempt: attempt + 1 });
+              return uid;
+            }
+          } else {
+            const exact = results.find(r => r.title === trimmedTitle && !r.isNsf)
+              || results.find(r => r.title === trimmedTitle)
+              || results.find(r => !r.isNsf)
+              || results[0];
+            if (exact?.uid) {
+              log.info('Found record UID via searchRecords', { recordUid: exact.uid, attempt: attempt + 1 });
+              return exact.uid;
+            }
+          }
+        }
+
+        const searchCommand = 'search ' + shellEscape(trimmedTitle) + ' --format=json';
+        const searchResult = await this._executeCommandAsync(searchCommand, 10);
+
+        if (searchResult?.status === 'success' && searchResult.data) {
+          const data = Array.isArray(searchResult.data) ? searchResult.data : [];
+          if (data.length > 0) {
+            const matchingRecord = data.find(r => r.title === trimmedTitle) || data[0];
+            const uid = matchingRecord.uid || matchingRecord.record_uid;
+            if (uid) {
+              log.info('Found record UID via generic search', { recordUid: uid, attempt: attempt + 1 });
+              return uid;
+            }
+          }
+        }
+
+        log.debug('Record UID not found yet', { attempt: attempt + 1, title: trimmedTitle, isNsf });
+      } catch (searchError) {
+        log.debug('UID lookup error', { attempt: attempt + 1, error: searchError.message });
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -1828,6 +1867,30 @@ class KeeperClient {
     
     log.warn('Polling timed out after ' + maxWait + ' seconds');
     return null;
+  }
+
+  /**
+   * Convert a UI self-destruct duration (e.g. "5m", "24h") to Commander format
+   * (e.g. "5mi", "1d"). Falls back to the raw string if unrecognised.
+   * @param {string} uiDuration
+   * @returns {string}
+   */
+  _formatSelfDestructDuration(uiDuration) {
+    const UI_TO_SECONDS = {
+      '5m': 300,
+      '10m': 600,
+      '15m': 900,
+      '30m': 1800,
+      '1h': 3600,
+      '24h': 86400,
+      '7d': 604800,
+      '30d': 2592000,
+      '90d': 7776000,
+    };
+    if (Object.prototype.hasOwnProperty.call(UI_TO_SECONDS, uiDuration)) {
+      return this._formatDuration(UI_TO_SECONDS[uiDuration]);
+    }
+    return uiDuration;
   }
 
   _formatDuration(seconds) {

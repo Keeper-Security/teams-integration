@@ -39,6 +39,20 @@ async function handleRefreshApprovalCard(data) {
   log.debug(`Approval ${approvalId} has status: ${status.status}`);
   
   if (type === 'record') {
+    if (status.status === 'invitation_sent') {
+      return cards.buildRecordInvitationSentCard({
+        approvalId,
+        requesterName: status.requesterName || data.requesterName,
+        requesterEmail: status.requesterEmail || data.requesterEmail,
+        recordTitle: status.recordTitle || data.recordTitle,
+        recordUid: status.recordUid || data.recordUid,
+        justification: status.justification || data.justification,
+        permission: status.permission,
+        approverName: status.approverName,
+        processedTime: status.processedTime,
+      });
+    }
+
     return cards.buildRecordApprovalCardWithStatus({
       approvalId: approvalId,
       requesterName: status.requesterName || data.requesterName,
@@ -52,8 +66,24 @@ async function handleRefreshApprovalCard(data) {
       expiresAt: status.expiresAt,
       processedTime: status.processedTime,
       isNsf: status.isNsf,
+      selfDestruct: status.selfDestruct,
+      selfDestructDuration: status.selfDestructDuration,
     });
   } else if (type === 'folder') {
+    if (status.status === 'invitation_sent') {
+      return cards.buildFolderInvitationSentCard({
+        approvalId,
+        requesterName: status.requesterName || data.requesterName,
+        requesterEmail: status.requesterEmail || data.requesterEmail,
+        folderName: status.folderName || data.folderName,
+        folderUid: status.folderUid || data.folderUid,
+        justification: status.justification || data.justification,
+        permission: status.permission,
+        approverName: status.approverName,
+        processedTime: status.processedTime,
+      });
+    }
+
     return cards.buildFolderApprovalCardWithStatus({
       approvalId: approvalId,
       requesterName: status.requesterName || data.requesterName,

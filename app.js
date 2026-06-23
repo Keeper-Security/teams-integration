@@ -279,6 +279,27 @@ app.on("invoke", async (context) => {
     
     log.debug('Action', { verb, action });
     
+    if (verb === 'refreshPostCreateCard') {
+      try {
+        log.debug('Processing refresh for post-create', data.approvalId);
+        const { handleRefreshPostCreateCard } = require('./handlers/approvalHandler');
+        const updatedCard = handleRefreshPostCreateCard(data);
+
+        if (updatedCard) {
+          return {
+            statusCode: 200,
+            type: 'application/vnd.microsoft.card.adaptive',
+            value: updatedCard,
+          };
+        }
+
+        return { statusCode: 200 };
+      } catch (error) {
+        log.error('Error refreshing post-create card', error);
+        return { statusCode: 200 };
+      }
+    }
+
     if (verb === 'refreshApprovalCard') {
       try {
         log.debug('Processing refresh for approval', data.approvalId);
@@ -367,28 +388,33 @@ app.on("invoke", async (context) => {
           ...(v.action?.data || {}),
           ...(v.data || {}),
         };
+        const formField = (key) => (v[key] != null ? v[key] : merged[key]);
 
         const isCreateSecretFlow =
           merged.createSecretFlow === true ||
           merged.createSecretFlow === 'true';
 
-        const recordTitle = (merged.recordTitle || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
-        const recordLogin = (merged.recordLogin || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
-        const recordPassword = merged.recordPassword || '';
-        const recordUrl = (merged.recordUrl || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
-        const recordNotes = merged.recordNotes || '';
-        const targetFolderUidRaw = merged.targetFolderUid;
-        const autoGenToggle = merged.autoGeneratePassword || 'false';
+        const recordTitle = (formField('recordTitle') || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordLogin = (formField('recordLogin') || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordPassword = formField('recordPassword') || '';
+        const recordUrl = (formField('recordUrl') || '').replace(/[\r\n\x00-\x1f\x7f]/g, '');
+        const recordNotes = formField('recordNotes') || '';
+        const targetFolderUidRaw = formField('targetFolderUid');
+        const autoGenToggle = formField('autoGeneratePassword') || 'false';
         const autoGenChecked = autoGenToggle === 'true' || autoGenToggle === true;
         const hasManualPassword = !!recordPassword?.trim();
 
+        const useClassic = !isCreateSecretFlow && (
+          formField('useClassic') === 'true' || formField('useClassic') === true
+        );
+
         let selfDestructEnabled = false;
         let selfDestructDuration = null;
-        if (!isCreateSecretFlow) {
-          const selfDestructToggle = merged.selfDestruct || 'false';
+        if (!isCreateSecretFlow && useClassic) {
+          const selfDestructToggle = formField('selfDestruct') || 'false';
           selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
           selfDestructDuration = selfDestructEnabled
-            ? (merged.selfDestructDuration || '24h')
+            ? (formField('selfDestructDuration') || '24h')
             : null;
         }
 
@@ -413,6 +439,9 @@ app.on("invoke", async (context) => {
             recordUrl,
             recordNotes,
             autoGeneratePassword: merged.autoGeneratePassword,
+            useClassic,
+            selfDestruct: selfDestructEnabled ? 'true' : 'false',
+            selfDestructDuration: selfDestructDuration || '24h',
           });
 
         const pickValidTargetFolderUid = (raw, choices) => {
@@ -616,16 +645,22 @@ app.on("invoke", async (context) => {
           || recordPassword.trim() === ''
           || recordPassword === '$GEN';
 
-        const result = await keeperClientForCreate.createRecord({
+        const createArgs = {
           title: recordTitle.trim(),
           login: recordLogin.trim(),
           password: generatePassword ? '$GEN' : recordPassword,
           url: recordUrl?.trim() || null,
           notes: recordNotes?.trim() || null,
           generatePassword: generatePassword,
-          selfDestructDuration: selfDestructDuration,
           skipUidLookup: true,
-        });
+        };
+
+        const result = useClassic
+          ? await keeperClientForCreate.createRecord({
+              ...createArgs,
+              selfDestructDuration: selfDestructDuration,
+            })
+          : await keeperClientForCreate.createNsfRecord(createArgs);
 
         log.debug('Approval-flow record creation complete', result.success ? `UID: ${result.recordUid}` : `Error: ${result.error}`);
 
@@ -645,185 +680,46 @@ app.on("invoke", async (context) => {
           };
         }
 
-        if (selfDestructEnabled) {
-          const durationLabels = { '5m': '5 minutes', '10m': '10 minutes', '15m': '15 minutes', '30m': '30 minutes', '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days' };
-          const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
-          const selfDestructUrl = result.selfDestructUrl || null;
-          const body = [
-            { type: 'TextBlock', text: 'Self-Destruct Link Created', weight: 'Bolder', size: 'Large', color: 'Good' },
-            { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
-            ...(result.recordUid ? [{ type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true }] : []),
-            {
-              type: 'Container',
-              style: 'attention',
-              spacing: 'Medium',
-              items: [
-                { type: 'TextBlock', text: `The self-destruct link expires after ${durationLabel}.`, wrap: true },
-                {
-                  type: 'TextBlock',
-                  text: 'This is link-based access, not a persistent user share. The requester will not appear under the record sharing permissions in Keeper.',
-                  wrap: true,
-                  isSubtle: true,
-                },
-              ],
-            },
-          ];
-
-          if (!selfDestructUrl) {
-            body.push({
-              type: 'TextBlock',
-              text: 'Keeper confirmed the self-destruct record was created, but the share URL was not returned in the command response.',
-              wrap: true,
-              color: 'Warning',
-            });
-          }
-
-          return {
-            statusCode: 200,
-            type: 'application/vnd.microsoft.card.adaptive',
-            value: {
-              type: 'AdaptiveCard',
-              '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-              version: '1.5',
-              body,
-              actions: selfDestructUrl
-                ? [{ type: 'Action.OpenUrl', title: 'Open Self-Destruct Link', url: selfDestructUrl }]
-                : [],
-            },
-          };
-        }
-
-        // Success path: build the approval card with permission/duration selectors
-        // and return it inline as the response (replaces the form card in chat).
-        const { RECORD_PERMISSIONS, DURATION_OPTIONS } = require('./cards/constants');
+        const isNsfRecord = !useClassic;
 
         if (result.uidUnavailable || !result.recordUid) {
-          const createdTitle = recordTitle.trim();
+          const { startPostCreateUidLookup } = require('./handlers/approval/postCreate');
           return {
             statusCode: 200,
             type: 'application/vnd.microsoft.card.adaptive',
-            value: {
-              type: 'AdaptiveCard',
-              '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-              version: '1.5',
-              body: [
-                { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large', color: 'Good' },
-                { type: 'TextBlock', text: `Record: ${createdTitle}`, wrap: true, weight: 'Bolder' },
-                {
-                  type: 'TextBlock',
-                  text: 'Keeper confirmed the record was created, but the new UID was not returned immediately. Search for the created record below to continue the approval.',
-                  wrap: true,
-                  isSubtle: true,
-                },
-                { type: 'Input.Text', id: 'searchQuery', placeholder: 'Search for the created record...', value: createdTitle },
-              ],
-              actions: [
-                {
-                  type: 'Action.Execute',
-                  title: 'Search Created Record',
-                  style: 'positive',
-                  verb: 'lookup_record',
-                  data: {
-                    action: 'lookup_record',
-                    approvalId: approvalPayload.approvalId || '',
-                    identifier: approvalPayload.identifier || createdTitle,
-                    recordTitle: createdTitle,
-                    requesterId: approvalPayload.requesterId || '',
-                    requesterEmail: approvalPayload.requesterEmail || '',
-                    requesterAadObjectId: approvalPayload.requesterAadObjectId || '',
-                    requesterName: approvalPayload.requesterName || '',
-                    justification: approvalPayload.justification || '',
-                    searchQuery: createdTitle,
-                  },
-                },
-              ],
-            },
+            value: startPostCreateUidLookup(context, {
+              approvalId: approvalPayload.approvalId,
+              requesterName: approvalPayload.requesterName,
+              requesterId: approvalPayload.requesterId,
+              requesterEmail: approvalPayload.requesterEmail,
+              requesterAadObjectId: approvalPayload.requesterAadObjectId,
+              justification: approvalPayload.justification,
+              identifier: approvalPayload.identifier,
+              recordTitle: recordTitle.trim(),
+              isNsf: isNsfRecord,
+              selfDestructEnabled,
+              selfDestructDuration: selfDestructDuration || '24h',
+            }),
           };
         }
-
-        const successBodyElements = [
-          { type: 'TextBlock', text: 'Record Created Successfully!', weight: 'Bolder', size: 'Large' },
-          { type: 'TextBlock', text: `Requester: ${approvalPayload.requesterName || 'Unknown'}`, wrap: true },
-          { type: 'TextBlock', text: `Justification: ${approvalPayload.justification || 'N/A'}`, wrap: true, isSubtle: true },
-          {
-            type: 'Container',
-            style: 'good',
-            spacing: 'Medium',
-            items: [
-              { type: 'TextBlock', text: `Record: ${recordTitle.trim()}`, wrap: true, weight: 'Bolder' },
-              { type: 'TextBlock', text: `UID: ${result.recordUid}`, size: 'Small', isSubtle: true },
-            ],
-          },
-        ];
-
-        if (selfDestructEnabled) {
-          const durationLabels = { '5m': '5 minutes', '10m': '10 minutes', '15m': '15 minutes', '30m': '30 minutes', '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '90d': '90 days' };
-          const durationLabel = durationLabels[selfDestructDuration] || selfDestructDuration;
-          successBodyElements.push({
-            type: 'Container',
-            style: 'attention',
-            spacing: 'Medium',
-            items: [
-              { type: 'TextBlock', text: 'Self-Destruct Enabled', weight: 'Bolder', wrap: true },
-              { type: 'TextBlock', text: `This record will auto-delete after ${durationLabel}`, size: 'Small', wrap: true },
-            ],
-          });
-        }
-
-        successBodyElements.push(
-          { type: 'TextBlock', text: 'Permission Level', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-          { type: 'Input.ChoiceSet', id: 'permission', value: 'view_only', choices: RECORD_PERMISSIONS },
-          { type: 'TextBlock', text: 'Duration', weight: 'Bolder', size: 'Medium', spacing: 'Medium' },
-          { type: 'Input.ChoiceSet', id: 'duration', value: '1h', choices: DURATION_OPTIONS }
-        );
-
-        const successCard = {
-          type: 'AdaptiveCard',
-          '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-          version: '1.5',
-          body: successBodyElements,
-          actions: [
-            {
-              type: 'Action.Execute',
-              title: 'Approve',
-              style: 'positive',
-              verb: 'approve_record',
-              data: {
-                action: 'approve_record',
-                approvalId: approvalPayload.approvalId || '',
-                recordUid: result.recordUid,
-                recordTitle: recordTitle.trim(),
-                requesterId: approvalPayload.requesterId || '',
-                requesterEmail: approvalPayload.requesterEmail || '',
-                requesterName: approvalPayload.requesterName || '',
-                justification: approvalPayload.justification || '',
-                selfDestruct: selfDestructEnabled,
-                selfDestructDuration: selfDestructDuration,
-              },
-            },
-            {
-              type: 'Action.Execute',
-              title: 'Deny',
-              style: 'destructive',
-              verb: 'deny_record',
-              data: {
-                action: 'deny_record',
-                approvalId: approvalPayload.approvalId || '',
-                recordUid: result.recordUid,
-                recordTitle: recordTitle.trim(),
-                requesterId: approvalPayload.requesterId || '',
-                requesterEmail: approvalPayload.requesterEmail || '',
-                requesterName: approvalPayload.requesterName || '',
-                justification: approvalPayload.justification || '',
-              },
-            },
-          ],
-        };
 
         return {
           statusCode: 200,
           type: 'application/vnd.microsoft.card.adaptive',
-          value: successCard,
+          value: cards.buildPostCreateApprovalCard({
+            approvalId: approvalPayload.approvalId,
+            requesterName: approvalPayload.requesterName,
+            requesterId: approvalPayload.requesterId,
+            requesterEmail: approvalPayload.requesterEmail,
+            requesterAadObjectId: approvalPayload.requesterAadObjectId,
+            justification: approvalPayload.justification,
+            identifier: approvalPayload.identifier,
+            recordUid: result.recordUid,
+            recordTitle: recordTitle.trim(),
+            isNsf: isNsfRecord,
+            selfDestructEnabled,
+            selfDestructDuration: selfDestructDuration || '24h',
+          }),
         };
       } catch (error) {
         log.error('Error handling submit_create_record', { message: error.message, stack: error.stack });
@@ -831,6 +727,52 @@ app.on("invoke", async (context) => {
       }
     }
     
+    if (verb === 'refresh_create_form') {
+      try {
+        log.debug('Processing refresh_create_form');
+        const cards = require('./cards');
+
+        const v = activity.value || {};
+        const merged = { ...data, ...(v.action?.data || {}), ...(v.data || {}) };
+        const formField = (key) => (v[key] != null ? v[key] : merged[key]);
+
+        const useClassic = formField('useClassic') === 'true' || formField('useClassic') === true;
+        const selfDestructToggle = formField('selfDestruct') || 'false';
+        const selfDestructEnabled = selfDestructToggle === 'true' || selfDestructToggle === true;
+
+        const refreshedCard = cards.buildRecordCreationCard({
+          approvalId: merged.approvalId,
+          requesterName: merged.requesterName,
+          requesterId: merged.requesterId,
+          requesterEmail: merged.requesterEmail,
+          requesterAadObjectId: merged.requesterAadObjectId,
+          justification: merged.justification,
+          identifier: merged.identifier,
+          originalRecordTitle: merged.originalRecordTitle,
+          searchQuery: merged.searchQuery,
+          createSecretFlow: false,
+          recordTitle: formField('recordTitle') || '',
+          recordLogin: formField('recordLogin') || '',
+          recordPassword: formField('recordPassword') || '',
+          recordUrl: formField('recordUrl') || '',
+          recordNotes: formField('recordNotes') || '',
+          autoGeneratePassword: formField('autoGeneratePassword'),
+          useClassic,
+          selfDestruct: selfDestructEnabled ? 'true' : 'false',
+          selfDestructDuration: formField('selfDestructDuration') || '24h',
+        });
+
+        return {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.card.adaptive',
+          value: refreshedCard,
+        };
+      } catch (error) {
+        log.error('Error handling refresh_create_form', error);
+        return { statusCode: 500, body: error.message };
+      }
+    }
+
     if (verb === 'refresh_shared_folders') {
       try {
         log.debug('Processing refresh_shared_folders');
@@ -1219,6 +1161,17 @@ app.on("invoke", async (context) => {
     if (action?.startsWith('approve_') || action?.startsWith('deny_')) {
       try {
         log.debug(`Processing ${action} from adaptiveCard/action (Universal Action)`);
+
+        const v = activity.value || {};
+        const mergedApprovalData = {
+          ...data,
+          permission: v.permission || data.permission,
+          duration: v.duration || data.duration,
+          nsfRole: v.nsfRole || data.nsfRole,
+          rotateOnExpire: v.rotateOnExpire ?? data.rotateOnExpire,
+          selfDestruct: data.selfDestruct,
+          selfDestructDuration: data.selfDestructDuration,
+        };
         
         if (action.includes('pedm')) {
           const resultCard = await handlers.routePedmAction(context, data);
@@ -1246,7 +1199,7 @@ app.on("invoke", async (context) => {
           return { statusCode: 200 };
         }
         
-        const result = await handlers.routeApprovalActionWithCardResponse(context, data);
+        const result = await handlers.routeApprovalActionWithCardResponse(context, mergedApprovalData);
         
         log.debug(`Action ${action} completed`, { hasCard: !!result?.updatedCard, hasError: !!result?.error });
         

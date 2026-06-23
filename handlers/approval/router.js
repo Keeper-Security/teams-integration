@@ -6,7 +6,7 @@
 
 const keeperClient = require('../../services/keeperClient');
 const cards = require('../../cards');
-const { getChannelService, getApprovalStatus, storeApprovalStatus, createLogger } = require('../../services');
+const { getChannelService, getTerminalApprovalStatus, formatTerminalApprovalStatusDisplay, storeApprovalStatus, createLogger } = require('../../services');
 const { isPermissionConflictError, isRecordOwnerError, isPamUserRecordType } = require('../../utils/helpers');
 const { 
   DURATION_MAP,
@@ -14,6 +14,7 @@ const {
   getDisplayDuration,
   formatExpiryDate, 
   getApproverInfo, 
+  pinApprovalActivityId,
   tryUpdateApprovalCard,
   buildInvitationNotificationCard,
   getCurrentTimestamp,
@@ -74,11 +75,11 @@ async function routeApprovalActionWithCardResponse(context, data) {
   log.debug('routeApprovalActionWithCardResponse', action);
   
   if (approvalId) {
-    const existingStatus = getApprovalStatus(approvalId);
+    const existingStatus = getTerminalApprovalStatus(approvalId);
     if (existingStatus) {
       log.debug(`Approval ${approvalId} already processed: ${existingStatus.status}`);
-      
-      const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
+
+      const { label: statusText, color: statusColor } = formatTerminalApprovalStatusDisplay(existingStatus);
       const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
       const itemType = existingStatus.type === 'folder' ? 'Folder' : 'Record';
       
@@ -93,7 +94,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
             weight: 'Bolder',
             size: 'Large',
             wrap: true,
-            color: existingStatus.status === 'approved' ? 'Good' : 'Attention',
+            color: statusColor,
           },
           {
             type: 'FactSet',
@@ -148,15 +149,25 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
   const { approvalId, recordUid, requesterId, requesterEmail } = data;
   const recordTitle   = sanitizeDisplayField(data.recordTitle);
   const requesterName = sanitizeDisplayField(data.requesterName);
-  const permission = data.permission || 'view_only';
-  const duration = data.duration || '24h';
-  const durationSeconds = parseDuration(duration);
+  const selfDestruct = data.selfDestruct === 'true' || data.selfDestruct === true;
+  let permission = data.permission || 'view_only';
+  let duration = data.duration || '24h';
+  let durationSeconds = parseDuration(duration);
   const rotateOnExpire = data.rotateOnExpire === 'true' || data.rotateOnExpire === true;
-  const isNsf = data.isNsf === 'true' || data.isNsf === true;
-  const nsfRole = data.nsfRole || 'viewer';
+  const isNsf = !selfDestruct && (data.isNsf === 'true' || data.isNsf === true);
+  let nsfRole = data.nsfRole || 'viewer';
+
+  // Self-destruct records: share view-only using the duration chosen at creation
+  // (Classic-only; mirrors slack-app approval submit handler).
+  if (selfDestruct) {
+    permission = 'view_only';
+    duration = data.selfDestructDuration || '5m';
+    durationSeconds = parseDuration(duration);
+  }
+
   const processedTime = getCurrentTimestamp();
   
-  log.info('Approving record via Universal Action', { approvalId, approver: approver.name, recordTitle, permission, duration, rotateOnExpire, isNsf, nsfRole });
+  log.info('Approving record via Universal Action', { approvalId, approver: approver.name, recordTitle, permission, duration, rotateOnExpire, isNsf, nsfRole, selfDestruct });
   
   if (!recordUid) {
     log.error('Missing record UID');
@@ -167,6 +178,8 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     log.error('Missing or invalid requester email');
     return { error: 'Missing or invalid requester email' };
   }
+
+  pinApprovalActivityId(context, approvalId);
   
   // Build and return the "Processing" card immediately to avoid Teams timeout
   const processingCard = cards.buildRecordProcessingCard({
@@ -174,11 +187,13 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     requesterName,
     requesterEmail,
     recordTitle,
+    recordUid,
     justification: data.justification || '',
     permission: isNsf ? nsfRole : permission,
     duration: getDisplayDuration(isNsf ? nsfRole : permission, duration, 'record'),
     approverName: approver.name,
     processedTime,
+    isNsf,
   });
   
   // Fire off the grant operation asynchronously - don't await
@@ -195,6 +210,7 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     rotateOnExpire,
     isNsf,
     nsfRole,
+    selfDestruct,
     processedTime,
   });
   
@@ -219,6 +235,7 @@ async function processRecordGrantAsync(context, data, approver, params) {
     rotateOnExpire,
     isNsf = false,
     nsfRole = 'viewer',
+    selfDestruct = false,
     processedTime,
   } = params;
 
@@ -347,6 +364,7 @@ async function processRecordGrantAsync(context, data, approver, params) {
         requesterName,
         requesterEmail,
         recordTitle,
+        recordUid,
         justification: data.justification || '',
         permission: displayPermission,
         duration: getDisplayDuration(displayPermission, duration, 'record'),
@@ -354,6 +372,8 @@ async function processRecordGrantAsync(context, data, approver, params) {
         processedTime,
         invitationSent: isInvitationSent,
         isNsf,
+        selfDestruct,
+        selfDestructDuration: data.selfDestructDuration,
       });
       
       const pamRotateScheduled = !!result.rotateOnExpire;
@@ -386,6 +406,8 @@ async function processRecordGrantAsync(context, data, approver, params) {
           processedTime,
           rotateOnExpire: pamRotateScheduled,
           isNsf,
+          selfDestruct,
+          selfDestructDuration: data.selfDestructDuration,
         });
       }
       
@@ -414,6 +436,9 @@ async function processRecordGrantAsync(context, data, approver, params) {
                 itemType: 'record',
                 rotateOnExpire: pamRotateScheduled,
                 isNsf,
+                selfDestructNote: selfDestruct
+                  ? 'This is a self-destruct record and will automatically delete from the vault after the access period.'
+                  : undefined,
               });
             }
             
@@ -490,6 +515,8 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     log.error('Missing or invalid requester email');
     return { error: 'Missing or invalid requester email' };
   }
+
+  pinApprovalActivityId(context, approvalId);
   
   // Build and return the "Processing" card immediately to avoid Teams timeout
   const processingCard = cards.buildFolderProcessingCard({
@@ -497,11 +524,13 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     requesterName,
     requesterEmail,
     folderName,
+    folderUid,
     justification: data.justification || '',
     permission: isNsf ? nsfRole : permission,
     duration: getDisplayDuration(isNsf ? nsfRole : permission, duration, 'folder'),
     approverName: approver.name,
     processedTime,
+    isNsf,
   });
   
   // Fire off the grant operation asynchronously - don't await
@@ -682,6 +711,7 @@ async function processFolderGrantAsync(context, data, approver, params) {
         requesterName,
         requesterEmail,
         folderName,
+        folderUid,
         justification: data.justification || '',
         permission: displayPermission,
         duration: getDisplayDuration(displayPermission, duration, 'folder'),

@@ -4,7 +4,7 @@
  * Shared utility functions for approval handlers.
  */
 
-const { getChannelService, getApprovalActivityId, removeApprovalActivityId, createLogger } = require('../../services');
+const { getChannelService, getApprovalActivityId, removeApprovalActivityId, storeApprovalActivityId, createLogger } = require('../../services');
 const { formatCardDateTime } = require('../../utils/helpers');
 
 const log = createLogger('ApprovalHelpers');
@@ -15,6 +15,7 @@ const log = createLogger('ApprovalHelpers');
 const DURATION_MAP = {
   '5m': 300,
   '10m': 600,
+  '15m': 900,
   '30m': 1800,
   '1h': 3600,
   '4h': 14400,
@@ -22,6 +23,7 @@ const DURATION_MAP = {
   '24h': 86400,
   '7d': 604800,
   '30d': 2592000,
+  '90d': 7776000,
   'permanent': null,
 };
 
@@ -212,6 +214,22 @@ function getApproverInfo(activity) {
 }
 
 /**
+ * Pin the Teams message activity ID for an approval while handling an action.
+ * Ensures async card updates target the message the approver is viewing (including
+ * after inline create-record card replacements).
+ * @param {Object} context - Teams turn context
+ * @param {string} approvalId
+ */
+function pinApprovalActivityId(context, approvalId) {
+  if (!approvalId || !context?.activity) return;
+  const activityId = context.activity.replyToId || context.activity.id;
+  if (activityId) {
+    storeApprovalActivityId(approvalId, activityId);
+    log.debug('Pinned approval activity ID', { approvalId, activityId });
+  }
+}
+
+/**
  * Helper function to update an approval card in the channel
  * Uses context.updateActivity() directly for reliable message updates
  * When the message is edited, Teams auto-refreshes the card for all users
@@ -220,7 +238,10 @@ function getApproverInfo(activity) {
  * @param {Object} context - The Teams context
  */
 async function tryUpdateApprovalCard(approvalId, updatedCard, context) {
-  const activityId = context?.activity?.replyToId || getApprovalActivityId(approvalId);
+  // Prefer the ID pinned at action time; fall back to invoke replyToId.
+  const activityId = getApprovalActivityId(approvalId)
+    || context?.activity?.replyToId
+    || context?.activity?.id;
   
   if (!activityId) {
     log.debug(`No activity ID found for approval ${approvalId}`);
@@ -298,6 +319,7 @@ module.exports = {
   buildInvitationNotificationCard,
   buildPermissionConflictCard,
   getApproverInfo,
+  pinApprovalActivityId,
   tryUpdateApprovalCard,
   getCurrentTimestamp,
   sanitizeDisplayField,

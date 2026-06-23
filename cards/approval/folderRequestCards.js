@@ -819,15 +819,20 @@ function buildFolderProcessingCard({
   requesterName,
   requesterEmail,
   folderName,
+  folderUid,
   justification,
   permission,
   duration,
   approverName,
   processedTime,
+  isNsf = false,
 }) {
   const time = processedTime || getCurrentTimestamp();
+  const permLabel = isNsf
+    ? (NSF_ROLE_LABELS[permission] || permission)
+    : formatFolderPermissionLabel(permission);
   
-  return {
+  const card = {
     type: 'AdaptiveCard',
     '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
@@ -872,7 +877,7 @@ function buildFolderProcessingCard({
         spacing: 'Medium',
         columns: [
           { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: 'Permission:', weight: 'Bolder', size: 'Small' }] },
-          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: formatFolderPermissionLabel(permission), size: 'Small' }] },
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: permLabel, size: 'Small' }] },
         ],
       },
       {
@@ -892,6 +897,25 @@ function buildFolderProcessingCard({
     ],
     actions: [],
   };
+
+  card.refresh = {
+    action: {
+      type: 'Action.Execute',
+      verb: 'refreshApprovalCard',
+      data: {
+        approvalId,
+        type: 'folder',
+        requesterName,
+        requesterEmail,
+        folderName,
+        folderUid,
+        justification,
+        isNsf,
+      },
+    },
+  };
+
+  return card;
 }
 
 module.exports = {
