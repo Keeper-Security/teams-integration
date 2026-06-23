@@ -5,7 +5,7 @@
 
 const keeperClient = require('../services/keeperClient');
 const cards = require('../cards');
-const { getChannelService, getApprovalStatus, createLogger } = require('../services');
+const { getChannelService, getTerminalApprovalStatus, formatTerminalApprovalStatusDisplay, createLogger } = require('../services');
 
 const log = createLogger('TaskModule');
 
@@ -101,11 +101,11 @@ async function handleTaskFetch(context, activity) {
 
   // Check if this approval has already been processed
   if (approvalId) {
-    const existingStatus = getApprovalStatus(approvalId);
+    const existingStatus = getTerminalApprovalStatus(approvalId);
     if (existingStatus) {
       log.debug(`Approval ${approvalId} already processed: ${existingStatus.status}`);
-      
-      const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
+
+      const { label: statusText, color: statusColor } = formatTerminalApprovalStatusDisplay(existingStatus);
       const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
       const itemType = existingStatus.type === 'folder' ? 'Folder' : 'Record';
       
@@ -129,7 +129,7 @@ async function handleTaskFetch(context, activity) {
                     weight: 'Bolder',
                     size: 'Large',
                     wrap: true,
-                    color: existingStatus.status === 'approved' ? 'Good' : 'Attention',
+                    color: statusColor,
                   },
                   {
                     type: 'FactSet',
@@ -140,7 +140,7 @@ async function handleTaskFetch(context, activity) {
                       { title: 'Time:', value: existingStatus.processedTime || existingStatus.updatedAt || 'Unknown' },
                     ],
                   },
-                  existingStatus.status === 'approved' ? {
+                  existingStatus.status !== 'denied' ? {
                     type: 'FactSet',
                     facts: [
                       { title: 'Permission:', value: existingStatus.permission || 'N/A' },

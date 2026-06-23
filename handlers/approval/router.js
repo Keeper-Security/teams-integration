@@ -6,7 +6,7 @@
 
 const keeperClient = require('../../services/keeperClient');
 const cards = require('../../cards');
-const { getChannelService, getApprovalStatus, storeApprovalStatus, createLogger } = require('../../services');
+const { getChannelService, getTerminalApprovalStatus, formatTerminalApprovalStatusDisplay, storeApprovalStatus, createLogger } = require('../../services');
 const { isPermissionConflictError, isRecordOwnerError, isPamUserRecordType } = require('../../utils/helpers');
 const { 
   DURATION_MAP,
@@ -14,6 +14,7 @@ const {
   getDisplayDuration,
   formatExpiryDate, 
   getApproverInfo, 
+  pinApprovalActivityId,
   tryUpdateApprovalCard,
   buildInvitationNotificationCard,
   getCurrentTimestamp,
@@ -74,11 +75,11 @@ async function routeApprovalActionWithCardResponse(context, data) {
   log.debug('routeApprovalActionWithCardResponse', action);
   
   if (approvalId) {
-    const existingStatus = getApprovalStatus(approvalId);
+    const existingStatus = getTerminalApprovalStatus(approvalId);
     if (existingStatus) {
       log.debug(`Approval ${approvalId} already processed: ${existingStatus.status}`);
-      
-      const statusText = existingStatus.status === 'approved' ? 'APPROVED' : 'DENIED';
+
+      const { label: statusText, color: statusColor } = formatTerminalApprovalStatusDisplay(existingStatus);
       const itemName = existingStatus.recordTitle || existingStatus.folderName || 'the requested item';
       const itemType = existingStatus.type === 'folder' ? 'Folder' : 'Record';
       
@@ -93,7 +94,7 @@ async function routeApprovalActionWithCardResponse(context, data) {
             weight: 'Bolder',
             size: 'Large',
             wrap: true,
-            color: existingStatus.status === 'approved' ? 'Good' : 'Attention',
+            color: statusColor,
           },
           {
             type: 'FactSet',
@@ -148,13 +149,25 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
   const { approvalId, recordUid, requesterId, requesterEmail } = data;
   const recordTitle   = sanitizeDisplayField(data.recordTitle);
   const requesterName = sanitizeDisplayField(data.requesterName);
-  const permission = data.permission || 'view_only';
-  const duration = data.duration || '24h';
-  const durationSeconds = parseDuration(duration);
+  const selfDestruct = data.selfDestruct === 'true' || data.selfDestruct === true;
+  let permission = data.permission || 'view_only';
+  let duration = data.duration || '24h';
+  let durationSeconds = parseDuration(duration);
   const rotateOnExpire = data.rotateOnExpire === 'true' || data.rotateOnExpire === true;
+  const isNsf = !selfDestruct && (data.isNsf === 'true' || data.isNsf === true);
+  let nsfRole = data.nsfRole || 'viewer';
+
+  // Self-destruct records: share view-only using the duration chosen at creation
+  // (Classic-only; mirrors slack-app approval submit handler).
+  if (selfDestruct) {
+    permission = 'view_only';
+    duration = data.selfDestructDuration || '5m';
+    durationSeconds = parseDuration(duration);
+  }
+
   const processedTime = getCurrentTimestamp();
   
-  log.info('Approving record via Universal Action', { approvalId, approver: approver.name, recordTitle, permission, duration, rotateOnExpire });
+  log.info('Approving record via Universal Action', { approvalId, approver: approver.name, recordTitle, permission, duration, rotateOnExpire, isNsf, nsfRole, selfDestruct });
   
   if (!recordUid) {
     log.error('Missing record UID');
@@ -165,6 +178,8 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     log.error('Missing or invalid requester email');
     return { error: 'Missing or invalid requester email' };
   }
+
+  pinApprovalActivityId(context, approvalId);
   
   // Build and return the "Processing" card immediately to avoid Teams timeout
   const processingCard = cards.buildRecordProcessingCard({
@@ -172,11 +187,13 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     requesterName,
     requesterEmail,
     recordTitle,
+    recordUid,
     justification: data.justification || '',
-    permission,
-    duration: getDisplayDuration(permission, duration, 'record'),
+    permission: isNsf ? nsfRole : permission,
+    duration: getDisplayDuration(isNsf ? nsfRole : permission, duration, 'record'),
     approverName: approver.name,
     processedTime,
+    isNsf,
   });
   
   // Fire off the grant operation asynchronously - don't await
@@ -191,6 +208,9 @@ async function handleRecordApprovalWithCardResponse(context, data, approver) {
     duration,
     durationSeconds,
     rotateOnExpire,
+    isNsf,
+    nsfRole,
+    selfDestruct,
     processedTime,
   });
   
@@ -213,36 +233,58 @@ async function processRecordGrantAsync(context, data, approver, params) {
     duration,
     durationSeconds,
     rotateOnExpire,
+    isNsf = false,
+    nsfRole = 'viewer',
+    selfDestruct = false,
     processedTime,
   } = params;
+
+  // For NSF grants the "permission" shown/stored is the NSF role.
+  const displayPermission = isNsf ? nsfRole : permission;
   
   try {
-    // Centralized server-side re-check: only honor rotateOnExpire when the
-    // target record is actually a PAM User record. This gates both the direct
-    // approve_record path and the multi-select approve_selected_record path,
-    // so a tampered/replayed payload can't force rotation on an ineligible record.
-    let effectiveRotateOnExpire = rotateOnExpire;
-    if (effectiveRotateOnExpire) {
-      let recordType = '';
-      try {
-        const rec = await keeperClient.getRecordByUid(recordUid);
-        recordType = rec?.recordType || '';
-      } catch (e) {
-        log.debug('Record type lookup for rotate-on-expire gate failed, treating as ineligible', e.message);
-      }
-      if (!isPamUserRecordType(recordType)) {
-        log.warn('rotateOnExpire requested for non-PAM record, ignoring flag', { recordUid, recordType });
-        effectiveRotateOnExpire = false;
-      }
-    }
+    let result;
 
-    const result = await keeperClient.grantRecordAccess(
-      recordUid,
-      requesterEmail,
-      permission,
-      durationSeconds,
-      effectiveRotateOnExpire
-    );
+    if (isNsf) {
+      // Nested Share Folder record grant uses a single role and supports
+      // a 'permanent' (never-expiring) duration when no expiry is selected.
+      // Transfer Ownership ('owner') is always permanent regardless of the
+      // selected duration.
+      const nsfDurationSeconds = (nsfRole === 'owner' || duration === 'permanent') ? null : durationSeconds;
+      result = await keeperClient.grantNsfRecordAccess(
+        recordUid,
+        requesterEmail,
+        nsfRole,
+        nsfDurationSeconds
+      );
+    } else {
+      // Centralized server-side re-check: only honor rotateOnExpire when the
+      // target record is actually a PAM User record. This gates both the direct
+      // approve_record path and the multi-select approve_selected_record path,
+      // so a tampered/replayed payload can't force rotation on an ineligible record.
+      let effectiveRotateOnExpire = rotateOnExpire;
+      if (effectiveRotateOnExpire) {
+        let recordType = '';
+        try {
+          const rec = await keeperClient.getRecordByUid(recordUid);
+          recordType = rec?.recordType || '';
+        } catch (e) {
+          log.debug('Record type lookup for rotate-on-expire gate failed, treating as ineligible', e.message);
+        }
+        if (!isPamUserRecordType(recordType)) {
+          log.warn('rotateOnExpire requested for non-PAM record, ignoring flag', { recordUid, recordType });
+          effectiveRotateOnExpire = false;
+        }
+      }
+
+      result = await keeperClient.grantRecordAccess(
+        recordUid,
+        requesterEmail,
+        permission,
+        durationSeconds,
+        effectiveRotateOnExpire
+      );
+    }
     
     let finalCard;
     
@@ -322,12 +364,16 @@ async function processRecordGrantAsync(context, data, approver, params) {
         requesterName,
         requesterEmail,
         recordTitle,
+        recordUid,
         justification: data.justification || '',
-        permission,
-        duration: getDisplayDuration(permission, duration, 'record'),
+        permission: displayPermission,
+        duration: getDisplayDuration(displayPermission, duration, 'record'),
         expiresAt: expiresAtFormatted,
         processedTime,
         invitationSent: isInvitationSent,
+        isNsf,
+        selfDestruct,
+        selfDestructDuration: data.selfDestructDuration,
       });
       
       const pamRotateScheduled = !!result.rotateOnExpire;
@@ -354,11 +400,14 @@ async function processRecordGrantAsync(context, data, approver, params) {
           justification: data.justification || '',
           status: 'approved',
           approverName: approver.name,
-          permission: permission,
-          duration: getDisplayDuration(permission, duration, 'record'),
+          permission: displayPermission,
+          duration: getDisplayDuration(displayPermission, duration, 'record'),
           expiresAt: expiresAtFormatted,
           processedTime,
           rotateOnExpire: pamRotateScheduled,
+          isNsf,
+          selfDestruct,
+          selfDestructDuration: data.selfDestructDuration,
         });
       }
       
@@ -380,12 +429,16 @@ async function processRecordGrantAsync(context, data, approver, params) {
               notificationCard = cards.buildRequesterNotificationCard({
                 approved: true,
                 recordTitle: recordTitle,
-                permission: permission,
-                duration: getDisplayDuration(permission, duration, 'record'),
+                permission: displayPermission,
+                duration: getDisplayDuration(displayPermission, duration, 'record'),
                 expiresAt: expiresAtFormatted,
                 approverName: approver.name,
                 itemType: 'record',
                 rotateOnExpire: pamRotateScheduled,
+                isNsf,
+                selfDestructNote: selfDestruct
+                  ? 'This is a self-destruct record and will automatically delete from the vault after the access period.'
+                  : undefined,
               });
             }
             
@@ -447,9 +500,11 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
   const duration = data.duration || '24h';
   const durationSeconds = parseDuration(duration);
   const rotateOnExpire = data.rotateOnExpire === 'true' || data.rotateOnExpire === true;
+  const isNsf = data.isNsf === 'true' || data.isNsf === true;
+  const nsfRole = data.nsfRole || 'viewer';
   const processedTime = getCurrentTimestamp();
   
-  log.info('Approving folder via Universal Action', { approvalId, approver: approver.name, folderName, permission, duration, rotateOnExpire });
+  log.info('Approving folder via Universal Action', { approvalId, approver: approver.name, folderName, permission, duration, rotateOnExpire, isNsf, nsfRole });
   
   if (!folderUid) {
     log.error('Missing folder UID');
@@ -460,6 +515,8 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     log.error('Missing or invalid requester email');
     return { error: 'Missing or invalid requester email' };
   }
+
+  pinApprovalActivityId(context, approvalId);
   
   // Build and return the "Processing" card immediately to avoid Teams timeout
   const processingCard = cards.buildFolderProcessingCard({
@@ -467,11 +524,13 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     requesterName,
     requesterEmail,
     folderName,
+    folderUid,
     justification: data.justification || '',
-    permission,
-    duration: getDisplayDuration(permission, duration, 'folder'),
+    permission: isNsf ? nsfRole : permission,
+    duration: getDisplayDuration(isNsf ? nsfRole : permission, duration, 'folder'),
     approverName: approver.name,
     processedTime,
+    isNsf,
   });
   
   // Fire off the grant operation asynchronously - don't await
@@ -486,6 +545,8 @@ async function handleFolderApprovalWithCardResponse(context, data, approver) {
     duration,
     durationSeconds,
     rotateOnExpire,
+    isNsf,
+    nsfRole,
     processedTime,
   });
   
@@ -508,35 +569,54 @@ async function processFolderGrantAsync(context, data, approver, params) {
     duration,
     durationSeconds,
     rotateOnExpire,
+    isNsf = false,
+    nsfRole = 'viewer',
     processedTime,
   } = params;
+
+  // For NSF grants the "permission" shown/stored is the NSF role.
+  const displayPermission = isNsf ? nsfRole : permission;
   
   try {
-    // Centralized server-side re-check: only honor rotateOnExpire when the
-    // target folder is actually ROE-eligible. This gates both the direct
-    // approve_folder path and the multi-select approve_selected_folder path,
-    // so a tampered/replayed payload can't force rotation on an ineligible folder.
-    let effectiveRotateOnExpire = rotateOnExpire;
-    if (effectiveRotateOnExpire) {
-      let eligible = false;
-      try {
-        eligible = await keeperClient.isPamUserFolder(folderUid);
-      } catch (e) {
-        log.debug('Folder ROE-eligibility lookup for rotate-on-expire gate failed, treating as ineligible', e.message);
-      }
-      if (!eligible) {
-        log.warn('rotateOnExpire requested for non-eligible folder, ignoring flag', { folderUid });
-        effectiveRotateOnExpire = false;
-      }
-    }
+    let result;
 
-    const result = await keeperClient.grantFolderAccess(
-      folderUid,
-      requesterEmail,
-      permission,
-      durationSeconds,
-      effectiveRotateOnExpire
-    );
+    if (isNsf) {
+      // Nested Share Folder grant uses a single role and supports a
+      // 'permanent' (never-expiring) duration when no expiry is selected.
+      const nsfDurationSeconds = duration === 'permanent' ? null : durationSeconds;
+      result = await keeperClient.grantNsfFolderAccess(
+        folderUid,
+        requesterEmail,
+        nsfRole,
+        nsfDurationSeconds
+      );
+    } else {
+      // Centralized server-side re-check: only honor rotateOnExpire when the
+      // target folder is actually ROE-eligible. This gates both the direct
+      // approve_folder path and the multi-select approve_selected_folder path,
+      // so a tampered/replayed payload can't force rotation on an ineligible folder.
+      let effectiveRotateOnExpire = rotateOnExpire;
+      if (effectiveRotateOnExpire) {
+        let eligible = false;
+        try {
+          eligible = await keeperClient.isPamUserFolder(folderUid);
+        } catch (e) {
+          log.debug('Folder ROE-eligibility lookup for rotate-on-expire gate failed, treating as ineligible', e.message);
+        }
+        if (!eligible) {
+          log.warn('rotateOnExpire requested for non-eligible folder, ignoring flag', { folderUid });
+          effectiveRotateOnExpire = false;
+        }
+      }
+
+      result = await keeperClient.grantFolderAccess(
+        folderUid,
+        requesterEmail,
+        permission,
+        durationSeconds,
+        effectiveRotateOnExpire
+      );
+    }
     
     let finalCard;
     
@@ -631,12 +711,14 @@ async function processFolderGrantAsync(context, data, approver, params) {
         requesterName,
         requesterEmail,
         folderName,
+        folderUid,
         justification: data.justification || '',
-        permission,
-        duration: getDisplayDuration(permission, duration, 'folder'),
+        permission: displayPermission,
+        duration: getDisplayDuration(displayPermission, duration, 'folder'),
         expiresAt: expiresAtFormatted,
         processedTime,
         invitationSent: isInvitationSent,
+        isNsf,
       });
       
       const pamRotateScheduled = !!result.rotateOnExpire;
@@ -663,11 +745,12 @@ async function processFolderGrantAsync(context, data, approver, params) {
           justification: data.justification || '',
           status: 'approved',
           approverName: approver.name,
-          permission: permission,
-          duration: getDisplayDuration(permission, duration, 'folder'),
+          permission: displayPermission,
+          duration: getDisplayDuration(displayPermission, duration, 'folder'),
           expiresAt: expiresAtFormatted,
           processedTime,
           rotateOnExpire: pamRotateScheduled,
+          isNsf,
         });
       }
       
@@ -690,11 +773,12 @@ async function processFolderGrantAsync(context, data, approver, params) {
                 approved: true,
                 recordTitle: folderName,
                 itemType: 'folder',
-                permission: permission,
-                duration: getDisplayDuration(permission, duration, 'folder'),
+                permission: displayPermission,
+                duration: getDisplayDuration(displayPermission, duration, 'folder'),
                 expiresAt: expiresAtFormatted,
                 approverName: approver.name,
                 rotateOnExpire: pamRotateScheduled,
+                isNsf,
               });
             }
             
@@ -912,19 +996,9 @@ async function handleShareApprovalWithCardResponse(context, data, approver) {
     return { error: result.error };
   }
   
-  let expiresAtFormatted = 'N/A';
-  if (result.expiresAt) {
-    const expiryDate = new Date(result.expiresAt);
-    expiresAtFormatted = expiryDate.toLocaleString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-  }
+  // formatExpiryDate renders via Adaptive Card DATE()/TIME() so the recipient
+  // sees the expiry in their own local timezone (consistent with "Processed").
+  const expiresAtFormatted = result.expiresAt ? formatExpiryDate(result.expiresAt) : 'N/A';
   
   storeApprovalStatus(approvalId, {
     status: 'approved',

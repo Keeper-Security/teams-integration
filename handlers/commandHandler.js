@@ -198,6 +198,7 @@ async function handleRequestRecord(context, argsText) {
     justification,
     isUid: isUidFormat && !!record, // True only if UID format AND found
     identifier: uid, // Always pass the original identifier
+    isNsf: !!record?.isNsf,
   });
   
   // Try to send to approvals channel
@@ -327,6 +328,7 @@ async function handleRequestFolder(context, argsText) {
     justification,
     isUid: isUidFormat && !!folder, // True only if UID format AND found
     identifier: uid, // Always pass the original identifier
+    isNsf: !!folder?.isNsf,
   });
   
   // Try to send to approvals channel

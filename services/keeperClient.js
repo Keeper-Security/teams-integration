@@ -5,6 +5,7 @@
 const axios = require('axios');
 const { getConfig } = require('../config');
 const { createLogger } = require('./logger');
+const { isNsfType, isValidNsfRole, isNsfRecordCategory } = require('../utils/helpers');
 
 const log = createLogger('KeeperClient');
 
@@ -96,7 +97,7 @@ class KeeperClient {
 
   async searchFolders(query, limit = 20) {
     try {
-      const command = 'search -c s ' + shellEscape(query) + ' --format=json';
+      const command = 'search -c s,d ' + shellEscape(query) + ' --format=json';
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
@@ -131,6 +132,7 @@ class KeeperClient {
       
       let recordType = 'login';
       let notes = '';
+      let recordCategory = '';
       
       if (item.details) {
         const parts = item.details.split(', ');
@@ -139,6 +141,8 @@ class KeeperClient {
             recordType = part.replace('Type: ', '').trim();
           } else if (part.startsWith('Description: ')) {
             notes = part.replace('Description: ', '').trim();
+          } else if (part.startsWith('Record Category: ')) {
+            recordCategory = part.replace('Record Category: ', '').trim();
           }
         }
       }
@@ -149,6 +153,9 @@ class KeeperClient {
         recordType: itemType.includes('folder') ? itemType : recordType,
         folderUid: null,
         notes: notes,
+        // NSF records keep their normal type; "Record Category: Nested" is the
+        // reliable signal. Keep the type check as a fallback.
+        isNsf: isNsfRecordCategory(recordCategory) || isNsfType(itemType),
       };
     } catch (error) {
       log.error('Error getting record', error.message);
@@ -158,7 +165,7 @@ class KeeperClient {
 
   async getFolderByUid(folderUid) {
     try {
-      const command = 'search -c s ' + shellEscapeSearch(folderUid) + ' --format=json';
+      const command = 'search -c s,d ' + shellEscapeSearch(folderUid) + ' --format=json';
       const result = await this._executeCommandAsync(command, 30);
       
       if (!result || result.status !== 'success') {
@@ -178,6 +185,7 @@ class KeeperClient {
         name: item.name || 'Untitled Folder',
         parentUid: null,
         folderType: item.type || 'shared_folder',
+        isNsf: isNsfType(item.type),
       };
     } catch (error) {
       log.error('Error getting folder', error.message);
@@ -721,6 +729,191 @@ class KeeperClient {
     }
   }
 
+  /**
+   * Grant a user access to a Nested Share Folder (NSF) record via `nsf-share-record`.
+   * NSF uses a single role (viewer ... full-manager) instead of classic permission flags.
+   * @param {string} recordUid - NSF record UID
+   * @param {string} userEmail - Recipient email
+   * @param {string} role - NSF role (viewer, share-manager, content-manager, content-share-manager, full-manager)
+   * @param {number|null} durationSeconds - Access duration in seconds; null = permanent
+   * @returns {Promise<object>} Result shaped like grantRecordAccess
+   */
+  async grantNsfRecordAccess(recordUid, userEmail, role, durationSeconds = 86400) {
+    try {
+      // Transfer Ownership is a distinct NSF action (records only) and is always
+      // permanent. It uses `-a owner` instead of `-a grant -r <role>`.
+      if (role === 'owner') {
+        try { await this._executeCommandAsync('sync-down', 15); } catch (e) { log.warn('sync-down before nsf-share-record (owner) failed, proceeding', e.message); }
+
+        const ownerCommand = 'nsf-share-record ' + recordUid + ' -e ' + userEmail + ' -a owner --force';
+        log.info('Executing NSF record ownership transfer command', { command: ownerCommand });
+        const ownerResult = await this._executeCommandAsync(ownerCommand, 30);
+        log.info('NSF record ownership transfer result', { status: ownerResult?.status, message: ownerResult?.message, error: ownerResult?.error });
+
+        if (ownerResult?.status === 'success') {
+          return {
+            success: true,
+            expiresAt: 'N/A (Ownership Transfer)',
+            permission: 'owner',
+            nsfRole: 'owner',
+            isNsf: true,
+            duration: 'permanent',
+            invitationSent: this._isInvitationSent(ownerResult?.message || ''),
+          };
+        }
+
+        const ownerErr = this._formatError(ownerResult?.message) || '';
+        const ownerErrField = ownerResult?.error || '';
+        if (this._isInvitationSent((ownerErr + ' ' + ownerErrField).trim())) {
+          return {
+            success: true,
+            expiresAt: 'Pending Invitation',
+            permission: 'owner',
+            nsfRole: 'owner',
+            isNsf: true,
+            duration: 'permanent',
+            invitationSent: true,
+          };
+        }
+        return { success: false, error: ownerErr || ownerErrField || 'Failed to transfer Nested Share record ownership' };
+      }
+
+      if (!isValidNsfRole(role)) {
+        return { success: false, error: `Invalid Nested Share role: ${role}` };
+      }
+
+      try { await this._executeCommandAsync('sync-down', 15); } catch (e) { log.warn('sync-down before nsf-share-record failed, proceeding', e.message); }
+
+      // Revoke any existing share for this user first so a re-grant with a
+      // different role cleanly replaces the prior role (mirrors slack-app).
+      try {
+        await this._executeCommandAsync('nsf-share-record ' + recordUid + ' -e ' + userEmail + ' -a revoke --force', 15);
+      } catch (e) {
+        log.debug('NSF record revoke before grant skipped or failed, proceeding', e.message);
+      }
+
+      let command = 'nsf-share-record ' + recordUid + ' -e ' + userEmail + ' -a grant -r ' + role;
+
+      let expiresAtStr = 'Never (Permanent)';
+      const isPermanent = durationSeconds === null;
+      if (!isPermanent && durationSeconds) {
+        const expireIn = this._formatDuration(durationSeconds);
+        command += ' --expire-in ' + expireIn;
+        const expiresAt = new Date(Date.now() + durationSeconds * 1000);
+        expiresAtStr = expiresAt.toISOString();
+      }
+
+      command += ' --force';
+
+      log.info('Executing NSF record grant command', { command });
+      const result = await this._executeCommandAsync(command, 30);
+      log.info('NSF record grant result', { status: result?.status, message: result?.message, error: result?.error });
+
+      if (result?.status === 'success') {
+        const message = result?.message || '';
+        const invitationSent = this._isInvitationSent(message);
+        return {
+          success: true,
+          expiresAt: expiresAtStr,
+          permission: role,
+          nsfRole: role,
+          isNsf: true,
+          duration: isPermanent ? 'permanent' : 'temporary',
+          invitationSent: invitationSent,
+        };
+      }
+
+      const errorMsg = this._formatError(result?.message) || '';
+      const errorField = result?.error || '';
+      const combined = (errorMsg + ' ' + errorField).trim();
+
+      if (this._isInvitationSent(combined)) {
+        log.info('NSF record share invitation sent (detected in error response)', { recordUid, userEmail });
+        return {
+          success: true,
+          expiresAt: 'Pending Invitation',
+          permission: role,
+          nsfRole: role,
+          isNsf: true,
+          duration: 'permanent',
+          invitationSent: true,
+        };
+      }
+
+      return { success: false, error: errorMsg || errorField || 'Failed to share Nested Share record' };
+    } catch (error) {
+      return { success: false, error: 'Error granting Nested Share record access: ' + error.message };
+    }
+  }
+
+  /**
+   * Grant a user access to a Nested Share Folder (NSF) via `nsf-share-folder`.
+   * @param {string} folderUid - NSF folder UID
+   * @param {string} userEmail - Recipient email
+   * @param {string} role - NSF role
+   * @param {number|null} durationSeconds - Access duration in seconds; null = permanent
+   * @returns {Promise<object>} Result shaped like grantFolderAccess
+   */
+  async grantNsfFolderAccess(folderUid, userEmail, role, durationSeconds = 86400) {
+    try {
+      if (!isValidNsfRole(role)) {
+        return { success: false, error: `Invalid Nested Share role: ${role}` };
+      }
+
+      try { await this._executeCommandAsync('sync-down', 15); } catch (e) { log.warn('sync-down before nsf-share-folder failed, proceeding', e.message); }
+
+      let command = 'nsf-share-folder ' + folderUid + ' -a grant -e ' + userEmail + ' -r ' + role;
+
+      let expiresAtStr = 'Never (Permanent)';
+      const isPermanent = durationSeconds === null;
+      if (!isPermanent && durationSeconds) {
+        const expireIn = this._formatDuration(durationSeconds);
+        command += ' --expire-in ' + expireIn;
+        const expiresAt = new Date(Date.now() + durationSeconds * 1000);
+        expiresAtStr = expiresAt.toISOString();
+      }
+
+      log.info('Executing NSF folder grant command', { command });
+      const result = await this._executeCommandAsync(command, 30);
+      log.info('NSF folder grant result', { status: result?.status, message: result?.message, error: result?.error });
+
+      if (result?.status === 'success') {
+        const message = result?.message || '';
+        const invitationSent = this._isInvitationSent(message);
+        return {
+          success: true,
+          expiresAt: expiresAtStr,
+          permission: role,
+          nsfRole: role,
+          isNsf: true,
+          duration: isPermanent ? 'permanent' : 'temporary',
+          invitationSent: invitationSent,
+        };
+      }
+
+      const errorMsg = this._formatError(result?.message) || '';
+      const errorField = result?.error || '';
+      const combined = (errorMsg + ' ' + errorField).trim();
+
+      if (this._isInvitationSent(combined)) {
+        log.info('NSF folder share invitation sent (detected in error response)', { folderUid, userEmail });
+        return {
+          success: true,
+          expiresAt: 'Pending Invitation',
+          permission: role,
+          nsfRole: role,
+          isNsf: true,
+          duration: 'permanent',
+          invitationSent: true,
+        };
+      }
+
+      return { success: false, error: errorMsg || errorField || 'Failed to share Nested Share folder' };
+    } catch (error) {
+      return { success: false, error: 'Error granting Nested Share folder access: ' + error.message };
+    }
+  }
+
   async createOneTimeShare(recordUid, durationSeconds = 86400, editable = false) {
     try {
       const expireIn = this._formatDuration(durationSeconds || 604800);
@@ -834,10 +1027,12 @@ class KeeperClient {
         seen.add(uid);
         const name = row['Folder Name'] || row.folder_name || uid;
         const path = row['Folder Path'] || row['folder_path'] || name;
+        const folderType = row['Type'] || row.type || row.folder_type || '';
         const label = path && path !== name ? `${name} (${path})` : String(name);
         out.push({
           title: label.length > 120 ? label.slice(0, 117) + '...' : label,
           value: uid,
+          isNsf: isNsfType(folderType),
         });
       }
 
@@ -907,6 +1102,7 @@ class KeeperClient {
     generatePassword = false,
     selfDestructDuration = null,
     folderUid = null,
+    skipUidLookup = false,
   }) {
     try {
       if (!title || !title.trim()) {
@@ -932,9 +1128,10 @@ class KeeperClient {
         commandParts.push('--notes ' + shellEscape(notesForCli));
       }
       
-      // Add self-destruct duration if provided
+      // Add self-destruct duration if provided.
       if (selfDestructDuration && selfDestructDuration.trim()) {
-        commandParts.push('--self-destruct ' + selfDestructDuration);
+        const sdValue = this._formatSelfDestructDuration(selfDestructDuration.trim());
+        commandParts.push('--self-destruct ' + sdValue);
       }
       
       // Add login if provided
@@ -975,7 +1172,7 @@ class KeeperClient {
         };
       }
 
-      const recordUid = result.data?.record_uid;
+      const recordUid = this._extractRecordUidFromCreateResult(result);
       if (recordUid) {
         log.info('Record created with UID from response', { recordUid, title });
         return {
@@ -984,56 +1181,309 @@ class KeeperClient {
           title,
           generatedPassword: generatePassword || password === '$GEN',
           isNewlyCreated: true,
+          selfDestructUrl: selfDestructDuration ? this._extractUrlFromCreateResult(result) : null,
         };
       }
       
-      log.debug('Record created successfully, searching for UID...');
-
-      const maxRetries = 3;
-      const waitTimes = [2000, 3000, 4000];
-      
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, waitTimes[attempt]));
-        
-        try {
-          const searchCommand = 'search ' + shellEscape(title) + ' --format=json';
-          const searchResult = await this._executeCommandAsync(searchCommand, 10);
-          
-          if (searchResult && searchResult.status === 'success' && searchResult.data) {
-            const data = Array.isArray(searchResult.data) ? searchResult.data : [];
-            
-            if (data.length > 0) {
-              const matchingRecord = data.find(r => r.title === title) || data[0];
-              const uid = matchingRecord.uid || matchingRecord.record_uid;
-              
-              if (uid) {
-                log.info('Found created record UID after attempt ' + (attempt + 1), { recordUid: uid, title });
-                return {
-                  success: true,
-                  recordUid: uid,
-                  title,
-                  generatedPassword: generatePassword || password === '$GEN',
-                  isNewlyCreated: true,
-                };
-              }
-            }
-          }
-          
-          log.debug('Record not found yet, attempt ' + (attempt + 1) + ' of ' + maxRetries);
-        } catch (searchError) {
-          log.debug('Search error on attempt ' + (attempt + 1), searchError.message);
-        }
+      if (skipUidLookup) {
+        log.warn('Record created but UID not returned in response; skipping post-create UID lookup', { title });
+        return {
+          success: true,
+          recordUid: null,
+          title,
+          generatedPassword: generatePassword || password === '$GEN',
+          isNewlyCreated: true,
+          uidUnavailable: true,
+          selfDestructUrl: selfDestructDuration ? this._extractUrlFromCreateResult(result) : null,
+        };
       }
-      
-      log.warn('Record created but UID not found after ' + maxRetries + ' attempts');
+
+      const resolvedUid = await this.lookupRecordUidAfterCreate(title, { isNsf: false });
+      if (resolvedUid) {
+        log.info('Found created record UID via post-create lookup', { recordUid: resolvedUid, title });
+        return {
+          success: true,
+          recordUid: resolvedUid,
+          title,
+          generatedPassword: generatePassword || password === '$GEN',
+          isNewlyCreated: true,
+          selfDestructUrl: selfDestructDuration ? this._extractUrlFromCreateResult(result) : null,
+        };
+      }
+
+      log.warn('Record created but UID not found after post-create lookup', { title });
       return {
-        success: false,
-        error: 'Record created but UID could not be retrieved. The record exists in your vault but the approval flow cannot continue automatically. Please try searching for the record manually.',
+        success: true,
+        recordUid: null,
+        title,
+        generatedPassword: generatePassword || password === '$GEN',
+        isNewlyCreated: true,
+        uidUnavailable: true,
+        selfDestructUrl: selfDestructDuration ? this._extractUrlFromCreateResult(result) : null,
       };
     } catch (error) {
       log.error('Exception in createRecord', error);
       return { success: false, error: 'Error creating record: ' + error.message };
     }
+  }
+
+  /**
+   * Search for a newly created record's UID with retries.
+   * Used after record-add / nsf-record-add when Commander does not return the UID inline.
+   * @param {string} title - Record title to match
+   * @param {{ isNsf?: boolean }} [options]
+   * @returns {Promise<string|null>}
+   */
+  async lookupRecordUidAfterCreate(title, { isNsf = false } = {}) {
+    if (!title || !String(title).trim()) return null;
+
+    const trimmedTitle = String(title).trim();
+    const maxRetries = 3;
+    const waitTimes = [2000, 3000, 4000];
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, waitTimes[attempt]));
+
+      try {
+        const results = await this.searchRecords(trimmedTitle, 10);
+        if (results?.length > 0) {
+          if (isNsf) {
+            const nsfExact = results.find(r => r.title === trimmedTitle && r.isNsf);
+            const nsfAny = results.find(r => r.isNsf);
+            const uid = (nsfExact || nsfAny)?.uid;
+            if (uid) {
+              log.info('Found NSF record UID via searchRecords', { recordUid: uid, attempt: attempt + 1 });
+              return uid;
+            }
+          } else {
+            const exact = results.find(r => r.title === trimmedTitle && !r.isNsf)
+              || results.find(r => r.title === trimmedTitle)
+              || results.find(r => !r.isNsf)
+              || results[0];
+            if (exact?.uid) {
+              log.info('Found record UID via searchRecords', { recordUid: exact.uid, attempt: attempt + 1 });
+              return exact.uid;
+            }
+          }
+        }
+
+        const searchCommand = 'search ' + shellEscape(trimmedTitle) + ' --format=json';
+        const searchResult = await this._executeCommandAsync(searchCommand, 10);
+
+        if (searchResult?.status === 'success' && searchResult.data) {
+          const data = Array.isArray(searchResult.data) ? searchResult.data : [];
+          if (data.length > 0) {
+            const matchingRecord = data.find(r => r.title === trimmedTitle) || data[0];
+            const uid = matchingRecord.uid || matchingRecord.record_uid;
+            if (uid) {
+              log.info('Found record UID via generic search', { recordUid: uid, attempt: attempt + 1 });
+              return uid;
+            }
+          }
+        }
+
+        log.debug('Record UID not found yet', { attempt: attempt + 1, title: trimmedTitle, isNsf });
+      } catch (searchError) {
+        log.debug('UID lookup error', { attempt: attempt + 1, error: searchError.message });
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Create a record inside a Nested Share Folder (NSF) via `nsf-record-add`.
+   * Mirrors createRecord but targets the NSF (v3) folder system.
+   * @returns {Promise<object>} Result shaped like createRecord
+   */
+  async createNsfRecord({
+    title,
+    login,
+    password,
+    url,
+    notes,
+    generatePassword = false,
+    folderUid = null,
+  }) {
+    try {
+      if (!title || !title.trim()) {
+        return { success: false, error: 'Title is required' };
+      }
+
+      const commandParts = ['nsf-record-add'];
+      commandParts.push('--record-type login');
+      commandParts.push('--title ' + shellEscape(title));
+
+      if (folderUid && String(folderUid).trim() && String(folderUid).trim() !== '_default_') {
+        commandParts.push('--folder ' + shellEscapeSearch(String(folderUid).trim()));
+      }
+
+      if (notes && notes.trim()) {
+        const notesForCli = notes.replace(/\n/g, '\\n');
+        commandParts.push('--notes ' + shellEscape(notesForCli));
+      }
+
+      if (login && login.trim()) {
+        commandParts.push('login=' + shellEscape(login));
+      }
+
+      if (password && password.trim()) {
+        if (password === '$GEN') {
+          commandParts.push('password=$GEN');
+        } else {
+          commandParts.push('password=' + shellEscape(password));
+        }
+      } else if (generatePassword) {
+        commandParts.push('password=$GEN');
+      }
+
+      if (url && url.trim()) {
+        commandParts.push('url=' + shellEscape(url));
+      }
+
+      const command = commandParts.join(' ');
+      log.debug('Creating NSF record with command', command.replace(/password=[^\s]+/, 'password=***'));
+
+      const result = await this._executeCommandAsync(command, 20);
+
+      if (!result || result.status !== 'success') {
+        const classified = this._classifyCreateRecordError(result);
+        return {
+          success: false,
+          error: classified.friendly,
+          errorCode: classified.code,
+          errorTitle: classified.title,
+          rawError: classified.raw,
+          httpStatus: result?.httpStatus,
+        };
+      }
+
+      const recordUid = this._extractRecordUidFromCreateResult(result);
+      if (recordUid) {
+        log.info('NSF record created with UID from response', { recordUid, title });
+      } else {
+        // NSF records are not indexed by the classic `search` command, so the UID
+        // may not be resolvable post-create. The record still exists in the vault.
+        log.warn('NSF record created but UID not returned in response', { title });
+      }
+
+      return {
+        success: true,
+        recordUid,
+        title,
+        generatedPassword: generatePassword || password === '$GEN',
+        isNewlyCreated: true,
+        isNsf: true,
+        uidUnavailable: !recordUid,
+      };
+    } catch (error) {
+      log.error('Exception in createNsfRecord', error);
+      return { success: false, error: 'Error creating Nested Share record: ' + error.message };
+    }
+  }
+
+  _extractRecordUidFromCreateResult(result) {
+    if (!result) return null;
+
+    const directContainers = [result.data, result];
+    const directKeys = [
+      'record_uid',
+      'recordUid',
+      'recordUID',
+      'uid',
+      'UID',
+      'record_id',
+      'recordId',
+    ];
+
+    for (const container of directContainers) {
+      if (!container || typeof container !== 'object') continue;
+      for (const key of directKeys) {
+        const value = container[key];
+        if (typeof value === 'string' && this._looksLikeKeeperUid(value)) {
+          return value;
+        }
+      }
+    }
+
+    const strings = [];
+    const collectStrings = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        strings.push(value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((item) => collectStrings(item, depth + 1));
+        return;
+      }
+      if (typeof value === 'object') {
+        Object.values(value).forEach((item) => collectStrings(item, depth + 1));
+      }
+    };
+
+    collectStrings(result.data);
+    collectStrings(result.message);
+    collectStrings(result.error);
+
+    for (const text of strings) {
+      const match = text.match(/\b[A-Za-z0-9_-]{20,24}\b/);
+      if (match && this._looksLikeKeeperUid(match[0])) {
+        return match[0];
+      }
+    }
+
+    return null;
+  }
+
+  _extractUrlFromCreateResult(result) {
+    if (!result) return null;
+
+    const directContainers = [result.data, result];
+    const directKeys = ['url', 'share_url', 'shareUrl', 'shareURL', 'self_destruct_url', 'selfDestructUrl', 'link'];
+
+    for (const container of directContainers) {
+      if (!container || typeof container !== 'object') continue;
+      for (const key of directKeys) {
+        const value = container[key];
+        if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+          return value;
+        }
+      }
+    }
+
+    const strings = [];
+    const collectStrings = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        strings.push(value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((item) => collectStrings(item, depth + 1));
+        return;
+      }
+      if (typeof value === 'object') {
+        Object.values(value).forEach((item) => collectStrings(item, depth + 1));
+      }
+    };
+
+    collectStrings(result.data);
+    collectStrings(result.message);
+    collectStrings(result.error);
+
+    for (const text of strings) {
+      const match = text.match(/https?:\/\/[^\s<>"')\]]+/i);
+      if (match) {
+        return match[0];
+      }
+    }
+
+    return null;
+  }
+
+  _looksLikeKeeperUid(value) {
+    return typeof value === 'string' && /^[A-Za-z0-9_-]{20,24}$/.test(value);
   }
 
   async syncPedmData() {
@@ -1419,6 +1869,30 @@ class KeeperClient {
     return null;
   }
 
+  /**
+   * Convert a UI self-destruct duration (e.g. "5m", "24h") to Commander format
+   * (e.g. "5mi", "1d"). Falls back to the raw string if unrecognised.
+   * @param {string} uiDuration
+   * @returns {string}
+   */
+  _formatSelfDestructDuration(uiDuration) {
+    const UI_TO_SECONDS = {
+      '5m': 300,
+      '10m': 600,
+      '15m': 900,
+      '30m': 1800,
+      '1h': 3600,
+      '24h': 86400,
+      '7d': 604800,
+      '30d': 2592000,
+      '90d': 7776000,
+    };
+    if (Object.prototype.hasOwnProperty.call(UI_TO_SECONDS, uiDuration)) {
+      return this._formatDuration(UI_TO_SECONDS[uiDuration]);
+    }
+    return uiDuration;
+  }
+
   _formatDuration(seconds) {
     if (!seconds || seconds <= 0) {
       return '7d';
@@ -1455,6 +1929,7 @@ class KeeperClient {
       if (type === 'record') {
         let recordType = 'login';
         let notes = '';
+        let recordCategory = '';
         
         if (item.details) {
           const parts = item.details.split(', ');
@@ -1463,6 +1938,8 @@ class KeeperClient {
               recordType = part.replace('Type: ', '').trim();
             } else if (part.startsWith('Description: ')) {
               notes = part.replace('Description: ', '').trim();
+            } else if (part.startsWith('Record Category: ')) {
+              recordCategory = part.replace('Record Category: ', '').trim();
             }
           }
         }
@@ -1472,12 +1949,16 @@ class KeeperClient {
           title: item.name,
           recordType: recordType,
           notes: notes,
+          // NSF records keep their normal type (e.g. "login"); the reliable
+          // signal is "Record Category: Nested". Keep the type check as a fallback.
+          isNsf: isNsfRecordCategory(recordCategory) || isNsfType(item.type),
         });
       } else {
         results.push({
           uid: item.uid,
           name: item.name,
           folderType: item.type || 'shared_folder',
+          isNsf: isNsfType(item.type),
         });
       }
     }
@@ -1595,8 +2076,11 @@ try {
     isPamUserFolder: async () => false,
     grantRecordAccess: async () => ({ success: false, error: 'Client not initialized' }),
     grantFolderAccess: async () => ({ success: false, error: 'Client not initialized' }),
+    grantNsfRecordAccess: async () => ({ success: false, error: 'Client not initialized' }),
+    grantNsfFolderAccess: async () => ({ success: false, error: 'Client not initialized' }),
     createOneTimeShare: async () => ({ success: false, error: 'Client not initialized' }),
     createRecord: async () => ({ success: false, error: 'Client not initialized' }),
+    createNsfRecord: async () => ({ success: false, error: 'Client not initialized' }),
     getSharedFolderChoicesForEmail: async () => ({
       choiceSetChoices: [],
       error: 'Unable to load shared folder list. Please try again.',

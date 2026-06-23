@@ -5,6 +5,9 @@
  * share links, and other results.
  */
 
+const { NSF_ROLE_LABELS } = require('./constants');
+const { formatCardDateTime } = require('../utils/helpers');
+
 /**
  * Build an Adaptive Card for approval result notification
  */
@@ -518,23 +521,8 @@ function formatDate(dateStr) {
     }
   }
   
-  try {
-    const date = new Date(dateStr);
-    // Check if date is valid
-    if (isNaN(date.getTime())) {
-      return dateStr;
-    }
-    return date.toLocaleString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch (e) {
-    return dateStr;
-  }
+  // Render via Adaptive Card DATE()/TIME() so each viewer sees their own timezone.
+  return formatCardDateTime(dateStr);
 }
 
 /**
@@ -551,6 +539,8 @@ function buildRequesterNotificationCard({
   denialReason,
   itemType = 'record',
   rotateOnExpire = false,
+  isNsf = false,
+  selfDestructNote,
 }) {
   const statusText = approved ? 'Your Access Request Has Been Approved!' : 'Your Access Request Has Been Denied';
   const containerStyle = approved ? 'good' : 'attention';
@@ -626,9 +616,10 @@ function buildRequesterNotificationCard({
         {
           type: 'FactSet',
           facts: [
-            { title: 'Permission', value: formatPermission(permission) },
+            { title: isNsf ? 'Role' : 'Permission', value: isNsf ? (NSF_ROLE_LABELS[permission] || permission) : formatPermission(permission) },
             { title: 'Duration', value: duration || 'Permanent' },
             ...(expiresAt ? [{ title: 'Expires', value: expiresAt }] : [{ title: 'Expires', value: 'Never (Permanent)' }]),
+            ...(isNsf ? [{ title: 'Folder Type', value: 'Nested Share' }] : []),
             ...(rotateOnExpire ? [{ title: 'Credential Rotation', value: 'Enabled on expiry' }] : []),
           ],
         },
@@ -647,6 +638,13 @@ function buildRequesterNotificationCard({
           isSubtle: true,
           size: 'Small',
         },
+        ...(selfDestructNote ? [{
+          type: 'TextBlock',
+          text: selfDestructNote,
+          wrap: true,
+          color: 'Attention',
+          size: 'Small',
+        }] : []),
       ],
     });
   } else {
